@@ -58,7 +58,7 @@ class GeminiClient:
             gen_cfg: Dict[str, Any] = (
                 {'thinkingConfig': {'thinkingLevel': MODEL_ROLES.get(role, {}).get('thinking_level', 'high')},
                  'maxOutputTokens': 65536}
-                if model.startswith('gemini-4') else {'temperature': temperature})
+                if model.startswith(('gemini-3', 'gemini-4')) else {'temperature': temperature})
             if json_mode:
                 gen_cfg["responseMimeType"] = "application/json"
             payload["generationConfig"] = gen_cfg

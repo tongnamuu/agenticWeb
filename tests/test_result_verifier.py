@@ -36,15 +36,17 @@ class ResultVerifierTests(unittest.TestCase):
             {'url':'http://blog.test/post/2','bodyText':'물마시자 유머'},steps or [step()],browser)
 
     def test_read_only_tool_never_satisfies_write_request(self):
-        model=Client(verdict())
+        model=Client(verdict(False))
         result=self.verify(model,Browser('물마시자 유머'),[step('get_page_state')])
-        self.assertFalse(result['success']);self.assertEqual(model.calls,0)
+        self.assertFalse(result['success']);self.assertEqual(model.calls,1)
 
     def test_model_failure_is_not_overridden_by_executor_success(self):
         self.assertFalse(self.verify(Client(verdict(False)),Browser('물마시자 유머'))['success'])
 
     def test_unpersisted_dom_change_is_not_success(self):
-        self.assertFalse(self.verify(Client(verdict()),Browser('아직 게시글이 없습니다'))['success'])
+        model = Client(verdict(False))
+        self.assertFalse(self.verify(model,Browser('아직 게시글이 없습니다'))['success'])
+        self.assertEqual(model.calls, 1)
 
     def test_missing_category_fails_even_if_title_exists(self):
         self.assertFalse(self.verify(Client(verdict(category=False)),Browser('물마시자 유머'))['success'])
@@ -95,3 +97,17 @@ class VerificationErrorTests(unittest.TestCase):
         result=ResultVerificationAgent(BadClient()).verify('글 작성',{},
             {'url':'http://blog.test/'},[step()],Browser('saved'))
         self.assertEqual(result['failure_code'],'VERIFICATION_RESPONSE_FAILED')
+
+    def test_paraphrased_evidence_does_not_override_model_success(self):
+        v = verdict(evidence='인사말 Hello hello!가 새로고침 후에도 표시됨')
+        result = ResultVerificationAgent(Client(v)).verify('이름 hello 설정', {},
+            {'url':'https://todo.test/'}, [step('set_username')], Browser('Hello hello!'))
+        self.assertTrue(result['success'])
+        self.assertEqual(result['status'], 'SUCCESS')
+
+    def test_contradictory_model_response_is_error_not_task_failure(self):
+        v = verdict(category=False)
+        result = ResultVerificationAgent(Client(v)).verify('글 작성', {},
+            {'url':'https://blog.test/'}, [step()], Browser('유머'))
+        self.assertEqual(result['status'], 'ERROR')
+        self.assertEqual(result['failure_code'], 'VERIFICATION_RESPONSE_FAILED')

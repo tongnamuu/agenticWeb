@@ -89,6 +89,9 @@ class WorkflowApiTests(unittest.TestCase):
             try:
                 job = jobs.start('alice', services, workflow['id'])
                 self.assertTrue(entered.wait(2))
+                duplicate = jobs.start('alice', services, workflow['id'])
+                self.assertEqual(duplicate['id'], job['id'])
+                self.assertEqual(len(browser.calls), 1)
                 running = jobs.get('alice', job['id'])
                 self.assertEqual(running['status'], 'RUNNING')
                 self.assertEqual(running['result']['phase'], 'VERIFYING')

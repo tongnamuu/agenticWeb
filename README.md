@@ -18,7 +18,7 @@ python app.py
 
 브라우저에서 http://127.0.0.1:5055 에 접속합니다. 배포 시 WSGI 대상은 `app:app`입니다. 개발용 Flask 서버를 외부에 공개하는 대신 배포 환경의 WSGI 서버를 사용해야 합니다.
 
-`.env`의 `GEMINI_API_KEY` 또는 `GOOGLE_API_KEY`를 읽습니다. 대상 URL은 환경변수가 아니라 웹 요청마다 입력받습니다. 기본 모델은 모든 역할에서 `gemini-4-argon`(high thinking)이며 구형 모델로 자동 전환하지 않습니다. 모델은 `agentic_web/config.py`의 역할별 설정과 `GEMINI_ROOT_MODEL`, `GEMINI_SYNTHESIZER_MODEL`, `GEMINI_EXECUTOR_MODEL`로 지정합니다.
+`.env`의 `GEMINI_API_KEY` 또는 `GOOGLE_API_KEY`를 읽습니다. 대상 URL은 환경변수가 아니라 웹 요청마다 입력받습니다. 기본 모델은 결과 판정에 `gemini-3.8-flash`, 분석·실행에 `gemini-4-argon`(high thinking)을 사용하며 구형 모델로 자동 전환하지 않습니다. 모델은 `agentic_web/config.py`의 역할별 설정과 `GEMINI_ROOT_MODEL`, `GEMINI_SYNTHESIZER_MODEL`, `GEMINI_EXECUTOR_MODEL`로 지정합니다.
 
 ## 사용
 
@@ -133,3 +133,5 @@ Cloud Run 배포에는 웹 애플리케이션 OAuth 클라이언트의 `GOOGLE_C
 - `https://agentic-web-800515339243.asia-northeast3.run.app/auth/google/callback`
 
 로컬 `.env`의 `GOOGLE_REDIRECT_URI`는 로컬 주소로 유지합니다. `deploy.sh`는 별도의 `GOOGLE_DEPLOY_REDIRECT_URI`를 Cloud Run의 `GOOGLE_REDIRECT_URI`에 전달합니다. 미설정 시 서비스 이름·프로젝트 번호·리전으로 배포 콜백을 구성합니다. 임시 placeholder 주소는 사용하지 않습니다. OAuth 설정의 콜백 등록은 환경변수 설정과 별개입니다.
+
+결과 판정은 새로고침 후 관찰과 실행 내역을 Gemini 3.8 Flash에 전달해 결정합니다. 문자열 완전 일치로 모델 판정을 덮어쓰지 않습니다. 모델 호출·응답 형식 오류는 작업 실패와 구분해 판정 오류로 표시합니다.

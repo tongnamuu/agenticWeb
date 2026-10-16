@@ -197,10 +197,10 @@ class SavedWorkflows:
                         return run
                     # A successful mutation with uncertain verification must not be blindly repeated.
                     if output['action_result'].get('success') and attempt == 2:
-                        run.update(status='FAILED', message='변경 결과를 확인하지 못해 중복 실행을 중단했습니다.')
+                        run.update(status='ERROR' if verdict.get('status') == 'ERROR' else 'FAILED', message=verdict.get('reason') or '변경 결과를 확인하지 못해 중복 실행을 중단했습니다.')
                         return run
                 else:
-                    run.update(status='FAILED', message=verdict.get('reason', '단계 검증 실패'))
+                    run.update(status='ERROR' if verdict.get('status') == 'ERROR' else 'FAILED', message=verdict.get('reason', '단계 검증 실패'))
                     return run
                 run['next_step'] += 1
             run.update(status='SUCCESS', message='모든 단계를 순서대로 실행하고 검증했습니다.')

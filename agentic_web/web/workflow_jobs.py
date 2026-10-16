@@ -7,13 +7,17 @@ from uuid import uuid4
 class WorkflowJobs(AnalysisJobs):
     def start(self, owner, services, identifier, run_id=None):
         workflow = services.workflows.get(identifier)
+        with self.lock:
+            active = next((job['id'] for job in self.jobs.values() if job['owner'] == owner and job['status'] == 'RUNNING' and job.get('workflow_id') == identifier), None)
+        if active:
+            return self.get(owner, active)
         if not services.lock.acquire(blocking=False):
             raise ValueError('다른 브라우저 작업이 실행 중입니다.')
         job_id = uuid4().hex
         with self.lock:
             self.jobs = {key: value for key, value in self.jobs.items()
                          if value['status'] == 'RUNNING' or time() - value['created_at'] < 1800}
-            self.jobs[job_id] = dict(id=job_id, owner=owner, status='RUNNING',
+            self.jobs[job_id] = dict(id=job_id, owner=owner, workflow_id=identifier, status='RUNNING',
                                     message='워크플로우 시작', created_at=time(),
                                     result=dict(status='RUNNING', workflow=workflow, next_step=0, results=[]))
         try:

@@ -35,7 +35,7 @@ def get_api_key(override_key: str = "") -> str:
 # - skill_executor: Low-latency Function Calling & HITL input detection
 MODEL_ROLES: Dict[str, Dict[str, object]] = {
     "root_verifier": {
-        "primary": os.environ.get("GEMINI_ROOT_MODEL", "gemini-4-argon"),
+        "primary": os.environ.get("GEMINI_ROOT_MODEL", "gemini-3.8-flash"),
         "fallbacks": [],
         "thinking_level": "high",
     },

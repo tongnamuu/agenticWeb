@@ -1,5 +1,5 @@
 (() => {
-  const state = {sites: [], skills: [], steps: [], saved: [], id: null, busy: false};
+  const state = {sites: [], skills: [], steps: [], saved: [], id: null, busy: false, pendingJob: null};
   const el = (tag, text, cls = '') => { const n = document.createElement(tag); n.textContent = text; n.className = cls; return n; };
   const button = (text, action) => { const n = el('button', text, 'wf-button'); n.type = 'button'; n.onclick = action; return n; };
   const notice = text => document.getElementById('workflow-message').textContent = text;
@@ -12,8 +12,11 @@
   }
   async function api(url, data) {
     const response = await fetch(url, data === undefined ? {} : {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data)});
-    const body = await response.json();
-    if (!response.ok) throw new Error(body.error || '요청에 실패했습니다.');
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const error = new Error(body.error || `서버 응답 오류 (${response.status})`);
+      error.status = response.status; throw error;
+    }
     return body;
   }
   function props(tool) {
@@ -149,11 +152,11 @@
   }
   function renderRun(job) {
     const data = job.result || job;
-    const labels = {RUNNING:'실행 중', SUCCESS:'성공', FAILED:'실패', NEEDS_USER_INPUT:'사용자 입력 대기'};
+    const labels = {RUNNING:'실행 중', SUCCESS:'성공', FAILED:'실패', ERROR:'판정 오류', NEEDS_USER_INPUT:'사용자 입력 대기'};
     const verdict = document.getElementById('workflow-verdict');
     const elapsed = job.created_at ? ` · ${Math.max(0, Math.floor(Date.now()/1000-job.created_at))}초 경과` : '';
     verdict.textContent = `${job.status === 'RUNNING' ? '진행 상태' : '최종 판정'}: ${labels[job.status] || '결과 확인 필요'}${elapsed}`;
-    verdict.style.color = {SUCCESS:'#4ade80', FAILED:'#f87171', NEEDS_USER_INPUT:'#fbbf24'}[job.status] || '#67e8f9';
+    verdict.style.color = {SUCCESS:'#4ade80', FAILED:'#f87171', ERROR:'#fbbf24', NEEDS_USER_INPUT:'#fbbf24'}[job.status] || '#67e8f9';
     notice(job.message || data.message || '');
     const output = document.getElementById('workflow-result'); output.replaceChildren();
     const results = data.results || [];
@@ -161,14 +164,14 @@
       const latest = results.filter(result => result.step === index + 1).at(-1);
       let label = index < data.next_step ? '성공' : '대기';
       if (index === data.next_step) {
-        label = job.status === 'FAILED' ? '실패' : job.status === 'NEEDS_USER_INPUT' ? '사용자 입력 대기' :
+        label = job.status === 'ERROR' ? '판정 오류' : job.status === 'FAILED' ? '실패' : job.status === 'NEEDS_USER_INPUT' ? '사용자 입력 대기' :
           data.phase === 'VERIFYING' ? '결과 검증 중' : '실행 중';
       }
       if (latest?.verification.success) label = '성공';
       const card = el('article', '', 'wf-site');
       card.append(el('strong', `${index + 1}. ${step.tool_name} — ${label}`), el('p', step.url, 'wf-url'));
       results.filter(result => result.step === index + 1).forEach(result => {
-        card.append(el('p', `${result.attempt}차 검증: ${result.verification.success ? '성공' : '미확인'} · ${result.verification.reason || ''}`, 'wf-muted'));
+        card.append(el('p', `${result.attempt}차 검증: ${result.verification.success ? '성공' : result.verification.status === 'ERROR' ? '판정 오류' : '실패'} · ${result.verification.reason || ''}`, 'wf-muted'));
       });
       output.append(card);
     });
@@ -178,13 +181,26 @@
     setBusy(true); notice('워크플로우를 순서대로 실행·검증하고 있습니다…');
     const output = document.getElementById('workflow-result'); output.replaceChildren();
     try {
-      let job = (await api(`/api/workflows/${id}/run`, runId ? {run_id: runId} : {})).job;
+      let job = state.pendingJob?.workflowId === id ?
+        (await api('/api/workflow-jobs/' + state.pendingJob.id)).job :
+        (await api(`/api/workflows/${id}/run`, runId ? {run_id: runId} : {})).job;
+      if (!job?.id) throw new Error('실행 접수 응답에 실행 ID가 없습니다.');
+      state.pendingJob = {id:job.id, workflowId:id};
+      let pollFailures = 0;
       while (job.status === 'RUNNING') {
         renderRun(job);
         await new Promise(resolve => setTimeout(resolve, 1000));
-        job = (await api('/api/workflow-jobs/' + job.id)).job;
+        try {
+          job = (await api('/api/workflow-jobs/' + job.id)).job;
+          pollFailures = 0;
+        } catch (error) {
+          if (error.status === 404 || error.status === 401 || ++pollFailures >= 5) throw error;
+          notice(`결과 조회 재시도 ${pollFailures}/5 · 실행은 다시 시작하지 않습니다.`);
+          await new Promise(resolve => setTimeout(resolve, 2000));
+        }
       }
       renderRun(job);
+      state.pendingJob = null;
       const data = job.result || job;
       if (data.status === 'NEEDS_USER_INPUT') {
         output.append(button('로그인 브라우저로 이동 · 자동 재개', async () => {
@@ -211,7 +227,9 @@
       }
     } catch (error) {
       notice(error.message);
-      document.getElementById('workflow-verdict').textContent = '결과 확인 불가 · 서버 응답을 받지 못했습니다. 중복 실행하지 말고 상태를 확인하세요.';
+      document.getElementById('workflow-verdict').textContent = state.pendingJob ?
+        '결과 조회 연결 오류 · 기존 실행의 상태를 다시 확인할 수 있습니다.' : '실행 요청 실패 · ' + error.message;
+      if (state.pendingJob) output.append(button('기존 실행 결과 다시 확인', () => run(id)));
     }
     finally { setBusy(false); }
   }
