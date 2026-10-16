@@ -1,5 +1,5 @@
 """
-Google ADK (Agent Development Kit) Entrypoint & Singleton Runtime Export.
+Browser and agent runtime wiring, with optional Google ADK bindings.
 
 Exposes:
 - `browser_session`: Singleton `BrowserSession` (Chrome CDP controller)
@@ -10,10 +10,10 @@ Exposes:
 import os
 from typing import Any, Dict, Optional
 
-from agents import RootOrchestratorAgent
-from browser_controller import BrowserSession
-from config import MODEL_ROLES
-from skill_registry import URLMatcher
+from agentic_web.engine.agents.orchestrator import RootOrchestratorAgent
+from agentic_web.engine.browser.cdp import BrowserSession
+from agentic_web.config import MODEL_ROLES
+from agentic_web.engine.skills.registry import URLMatcher
 
 # Singleton BrowserSession & RootOrchestratorAgent
 HEADLESS_DEFAULT = os.environ.get("HEADLESS_BROWSER", "true").lower() in ("1", "true", "yes")

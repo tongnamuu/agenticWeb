@@ -1,8 +1,8 @@
 import tempfile
 import unittest
-from saved_workflows import SavedWorkflows
-from skill_registry import SkillRegistry
-from schemas import Tool, Step
+from agentic_web.engine.workflows.saved import SavedWorkflows
+from agentic_web.engine.skills.registry import SkillRegistry
+from agentic_web.engine.schemas import Tool, Step
 
 A, B = 'https://todo.test/', 'https://blog.test/'
 

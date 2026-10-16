@@ -1,8 +1,8 @@
 """Cross-site root orchestration over strictly URL-scoped skill execution."""
 from copy import deepcopy
-from site_agent import RootAgent
-from schemas import WorkflowDecision, Verdict
-from skill_registry import SkillRegistry, URLMatcher
+from agentic_web.engine.agents.site import RootAgent
+from agentic_web.engine.schemas import WorkflowDecision, Verdict
+from agentic_web.engine.skills.registry import SkillRegistry, URLMatcher
 
 
 class WorkflowAgent:

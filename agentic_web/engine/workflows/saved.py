@@ -5,7 +5,13 @@ import json
 from pathlib import Path
 from threading import Lock
 from uuid import uuid4
-from skill_registry import URLMatcher, atomic_json
+from agentic_web.config import WORKFLOWS_STORE_DIR
+from agentic_web.engine.skills.registry import URLMatcher, atomic_json
+from agentic_web.engine.storage import (
+    FIRESTORE_WORKFLOWS_COLLECTION,
+    ScopedFirestoreCollection,
+    resolve_store_scope,
+)
 
 
 def fingerprint(tool):
@@ -39,10 +45,16 @@ def validate_arguments(tool, arguments):
 
 
 class SavedWorkflows:
-    def __init__(self, registry, browser, verifier, directory='workflows_store'):
+    def __init__(self, registry, browser, verifier, directory=None, use_firestore=None):
         self.registry, self.browser, self.verifier = registry, browser, verifier
-        self.directory = Path(directory)
+        self.directory = Path(directory or WORKFLOWS_STORE_DIR)
         self.directory.mkdir(parents=True, exist_ok=True)
+        scope = resolve_store_scope(str(self.directory), WORKFLOWS_STORE_DIR)
+        self._firestore = ScopedFirestoreCollection(
+            FIRESTORE_WORKFLOWS_COLLECTION,
+            scope=scope,
+            use_firestore=use_firestore,
+        )
         self.lock = Lock()
         self.runs = {}
 
@@ -54,15 +66,43 @@ class SavedWorkflows:
         return tool
 
     def list(self):
-        return [json.loads(p.read_text(encoding='utf-8')) for p in sorted(self.directory.glob('*.json'))]
+        by_id = {}
+        for p in sorted(self.directory.glob('*.json')):
+            try:
+                wf = json.loads(p.read_text(encoding='utf-8'))
+                if isinstance(wf, dict) and wf.get('id'):
+                    by_id[wf['id']] = wf
+            except Exception:
+                pass
+        if self._firestore.enabled:
+            for wf in self._firestore.list_documents():
+                wf_id = wf.get('id') if isinstance(wf, dict) else None
+                if wf_id:
+                    by_id[wf_id] = wf
+                    try:
+                        atomic_json(str(self.directory / (wf_id + '.json')), wf)
+                    except Exception:
+                        pass
+        return [by_id[k] for k in sorted(by_id)]
 
     def get(self, identifier):
         if not isinstance(identifier, str) or len(identifier) != 32 or any(c not in '0123456789abcdef' for c in identifier):
             raise ValueError('잘못된 워크플로우 ID입니다.')
+        if self._firestore.enabled:
+            remote = self._firestore.get_document(identifier)
+            if isinstance(remote, dict) and remote.get('id') == identifier:
+                try:
+                    atomic_json(str(self.directory / (identifier + '.json')), remote)
+                except Exception:
+                    pass
+                return remote
         path = self.directory / (identifier + '.json')
         if not path.exists():
             raise ValueError('워크플로우를 찾을 수 없습니다.')
-        return json.loads(path.read_text(encoding='utf-8'))
+        wf = json.loads(path.read_text(encoding='utf-8'))
+        if self._firestore.enabled:
+            self._firestore.set_document(identifier, wf)
+        return wf
 
     def save(self, data):
         name = str(data.get('name') or '').strip()
@@ -82,6 +122,7 @@ class SavedWorkflows:
             self.get(identifier)
         workflow = {'id': identifier, 'name': name, 'steps': prepared}
         atomic_json(str(self.directory / (identifier + '.json')), workflow)
+        self._firestore.set_document(identifier, workflow)
         return workflow
 
     def run(self, identifier, run_id=None):
@@ -118,7 +159,7 @@ class SavedWorkflows:
                               'action_result': output['action_result'], 'verification': output['verification']}
                     verdict = self.verifier.verify_execution(
                         user_prompt=f"{tool['description']} 입력값: {json.dumps(step['arguments'], ensure_ascii=False)}",
-                        before_snapshot=output['before_snapshot'], after_snapshot=output['after_snapshot'], steps=[record])
+                        before_snapshot=output['before_snapshot'], after_snapshot=output['after_snapshot'], steps=[record], browser_session=self.browser)
                     run['results'].append({'step': run['next_step'] + 1, 'url': step['url'],
                                            'tool_name': tool['name'], 'attempt': attempt, 'verification': verdict})
                     if verdict.get('success'):

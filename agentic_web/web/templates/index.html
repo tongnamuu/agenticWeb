@@ -3,6 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="csrf-token" content="{{ csrf_token() }}">
+  <script src="{{ url_for('static', filename='auth.js') }}" defer></script>
   <title>Gemini URL-Skill Web Agent Studio</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
@@ -39,13 +41,17 @@
       </div>
     </div>
 
+    <div class="flex items-center gap-3 text-xs">
+      <span>{{ user.name }} · {{ user.email }}</span>
+      <form method="post" action="{{ url_for('auth.logout') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="wf-button">로그아웃</button>
+      </form>
+    </div>
+
     <!-- URL Bar & Presets -->
     <div class="flex items-center gap-2 flex-1 max-w-3xl">
-      <select id="preset-select" onchange="applyPresetUrl()" class="bg-slate-900 border border-slate-700 text-xs text-slate-300 rounded-lg px-2.5 py-2">
-        <option value="">사이트 URL을 입력하세요</option>
-        <option value="http://127.0.0.1:5055/demo-blog">📝 데모 블로그 보드 (다른 URL 스킬 분리 테스트)</option>
-        <option value="http://127.0.0.1:5055/demo-protected">🔒 보안 포털 (로그인 필요 HITL 테스트)</option>
-      </select>
+
       <input
         id="target-url"
         type="text"
@@ -55,13 +61,13 @@
         class="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-sm text-white focus:outline-none focus:border-indigo-500"
       />
       <button
-        onclick="analyzeCurrentUrl(false)"
+        id="analyze-url-btn" onclick="analyzeCurrentUrl(false)"
         class="px-3.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-xs font-semibold text-white transition"
       >
         URL 스킬 판별/추출
       </button>
       <button
-        onclick="analyzeCurrentUrl(true)"
+        id="repair-url-btn" onclick="analyzeCurrentUrl(true)"
         title="강제로 페이지를 다시 분석하여 스킬을 재합성합니다"
         class="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs text-slate-300 transition"
       >
@@ -70,19 +76,8 @@
     </div>
   </header>
 
-  <section class="wf-panel" aria-label="사이트 스킬과 워크플로우">
-    <div class="wf-heading"><div><h2>사이트 스킬 · 워크플로우</h2><p class="wf-muted">사이트별 기능을 골라 원하는 순서로 연결하세요. 예: 할 일 추가 → 블로그 작성 → 할 일 완료</p></div><button type="button" class="wf-button" id="workflow-refresh">새로고침</button></div>
-    <div class="wf-grid">
-      <div><h3>등록된 사이트와 스킬</h3><div id="workflow-catalog" class="wf-scroll"></div></div>
-      <div><div class="wf-heading"><h3>워크플로우 만들기</h3><button type="button" class="wf-button" id="workflow-new">새로 만들기</button></div>
-        <label class="wf-label">워크플로우 이름<input id="workflow-name" class="wf-input" placeholder="블로그 작성 후 할 일 완료" maxlength="200"></label>
-        <div id="workflow-steps" class="wf-scroll"></div>
-        <button type="button" class="wf-button wf-primary" id="workflow-save">워크플로우 저장</button>
-        <p id="workflow-message" role="status" aria-live="polite" class="wf-muted"></p>
-        <div id="workflow-result"></div><h3>저장된 워크플로우</h3><div id="workflow-saved"></div>
-      </div>
-    </div>
-  </section>
+<nav class="wf-panel flex gap-5"><a href="/">사이트 분석 · 스킬</a><a href="/workflows">워크플로우</a></nav>
+  <p id="analysis-status" role="status" aria-live="polite" class="px-6 py-3 text-sm text-cyan-300"></p>
   <!-- URL Routing Status Banner -->
   <div id="url-match-banner" class="bg-slate-900/90 border-b border-slate-800 px-6 py-2 flex items-center justify-between text-xs">
     <div class="flex items-center gap-2">
@@ -95,7 +90,7 @@
   <!-- Main 3-Column Grid -->
   <main class="flex-1 grid grid-cols-12 gap-4 p-4 max-w-[1750px] w-full mx-auto">
     <!-- Left Column: Per-URL Skill Registry (3 cols) -->
-    <section class="col-span-12 lg:col-span-3 glass rounded-xl p-4 flex flex-col max-h-[calc(100vh-135px)]">
+    <section class="col-span-12 lg:col-span-6 glass rounded-xl p-4 flex flex-col max-h-[calc(100vh-135px)]">
       <div class="flex items-center justify-between mb-3">
         <div>
           <h2 class="text-sm font-bold text-white">🗂️ URL별 스킬 레지스트리</h2>
@@ -106,45 +101,13 @@
       <div id="skill-registry-list" class="flex-1 overflow-y-auto code-scroll space-y-2.5 pr-1"></div>
     </section>
 
-    <!-- Center Column: Active URL Skill Tools & Direct Tester (4 cols) -->
-    <section class="col-span-12 lg:col-span-4 glass rounded-xl p-4 flex flex-col max-h-[calc(100vh-135px)]">
-      <div class="flex items-center justify-between mb-3">
-        <div>
-          <h2 class="text-sm font-bold text-white">🛠️ 현재 URL 전용 추출 스킬/툴</h2>
-          <p id="active-skill-subtitle" class="text-[11px] text-slate-400">현재 URL에 매칭된 스킬의 Tool Schema 및 실행 파이프라인</p>
-        </div>
-      </div>
-      <div id="active-tools-container" class="flex-1 overflow-y-auto code-scroll space-y-3 pr-1">
-        <div class="text-xs text-slate-500 py-10 text-center">
-          현재 URL에 등록된 스킬을 불러오는 중이거나 아직 분석 전입니다.<br/>
-          우측에서 바로 명령을 실행하면 자동으로 분석 후 스킬에 추가됩니다.
-        </div>
-      </div>
-    </section>
-
     <!-- Right Column: Root Agent Execution, Verification & 1x Retry Loop (5 cols) -->
-    <section class="col-span-12 lg:col-span-5 glass rounded-xl p-4 flex flex-col max-h-[calc(100vh-135px)]">
+    <section class="col-span-12 lg:col-span-6 glass rounded-xl p-4 flex flex-col max-h-[calc(100vh-135px)]">
       <div class="mb-3">
         <h2 class="text-sm font-bold text-white">🤖 루트 에이전트 실행 & 성공/실패 검증 (실패 시 1회 재시도)</h2>
         <p class="text-[11px] text-slate-400">
           1) URL 스킬 매칭/생성 → 2) 로그인/입력 필요 시 유저 요청(HITL) → 3) 스킬 실행 → 4) 루트 검증 및 실패 시 1회 재루프
         </p>
-      </div>
-
-      <!-- Quick Example Prompts -->
-      <div class="flex flex-wrap gap-1.5 mb-3">
-        <button onclick="setGoal('우유 사기 할 일 추가해줘')" class="text-[11px] px-2.5 py-1 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700">
-          + "우유 사기 할 일 추가해줘"
-        </button>
-        <button onclick="setGoal('현재 목록 상태 읽어줘')" class="text-[11px] px-2.5 py-1 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700">
-          🔍 "현재 목록 상태 읽어줘"
-        </button>
-        <button onclick="setGoal('우유 사기 항목 삭제해줘')" class="text-[11px] px-2.5 py-1 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700">
-          🗑️ "우유 사기 항목 삭제해줘"
-        </button>
-        <button onclick="setGoal('클라우드 배포 점검 티켓 추가해줘')" class="text-[11px] px-2.5 py-1 rounded-md bg-amber-950/60 hover:bg-amber-900/60 text-amber-300 border border-amber-700/50">
-          🔒 보안포털: "클라우드 배포 점검 티켓 추가해줘"
-        </button>
       </div>
 
       <!-- Goal Input -->
@@ -227,12 +190,6 @@
       return document.getElementById('target-url').value.trim();
     }
 
-    function applyPresetUrl() {
-      const sel = document.getElementById('preset-select').value;
-      document.getElementById('target-url').value = sel;
-      loadSkills();
-    }
-
     function setGoal(text) {
       document.getElementById('user-goal-input').value = text;
     }
@@ -241,14 +198,32 @@
       loadSkills();
     }
 
+    async function requestJson(url, options = {}) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 15000);
+      try {
+        const response = await fetch(url, {...options, signal: controller.signal});
+        let data;
+        try { data = await response.json(); }
+        catch { throw new Error(`서버가 올바른 응답을 반환하지 않았습니다 (HTTP ${response.status}).`); }
+        if (!response.ok || data.ok === false) throw new Error(data.error || `요청 실패 (HTTP ${response.status})`);
+        return data;
+      } catch (error) {
+        if (error.name === 'AbortError') throw new Error('서버 응답 시간이 초과됐습니다. 서버 연결을 확인하세요.');
+        throw error;
+      } finally { clearTimeout(timer); }
+    }
+
     async function loadSkills() {
       const url = getCurrentUrl();
-      const res = await fetch('/api/skills?url=' + encodeURIComponent(url));
-      const data = await res.json();
-      allSkills = data.skills || [];
-      window.dispatchEvent(new Event('skills-updated'));
-      renderSkillRegistry(allSkills, data.normalized_query_url);
-      renderMatchedUrlStatus(data.matched_skill_for_query_url, data.normalized_query_url);
+      try {
+        const data = await requestJson('/api/skills?url=' + encodeURIComponent(url));
+        allSkills = data.skills || [];
+        renderSkillRegistry(allSkills, data.normalized_query_url);
+        renderMatchedUrlStatus(data.matched_skill_for_query_url, data.normalized_query_url);
+      } catch (error) {
+        document.getElementById('analysis-status').textContent = error.message;
+      }
     }
 
     function renderMatchedUrlStatus(matchedSkill, normUrl) {
@@ -258,17 +233,12 @@
         badge.className = 'px-2 py-0.5 rounded font-semibold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40';
         badge.textContent = '✅ URL 스킬 매칭됨 (재사용 준비 완료)';
         text.textContent = `정규화 URL [${normUrl}] 전용 스킬 (${matchedSkill.skill_id}, v${matchedSkill.version}, 툴 ${matchedSkill.tools.length}개)이 즉시 호출됩니다.`;
-        renderActiveSkillTools(matchedSkill);
+
       } else {
         badge.className = 'px-2 py-0.5 rounded font-semibold bg-amber-500/20 text-amber-300 border border-amber-500/40';
         badge.textContent = '🆕 미등록 URL (실행 시 자동 분석 & 스킬 등록)';
         text.textContent = `정규화 URL [${normUrl}]에 등록된 스킬이 없습니다. 다른 URL의 스킬은 호출되지 않으며, 실행 시 새 스킬을 합성해 추가합니다.`;
-        document.getElementById('active-tools-container').innerHTML = `
-          <div class="text-xs text-slate-400 p-4 rounded-lg bg-slate-900/90 border border-slate-800">
-            현재 URL (<code class="text-amber-300">${normUrl}</code>)은 레지스트리에 등록되어 있지 않습니다.<br/>
-            상단 <strong>[URL 스킬 판별/추출]</strong> 또는 우측 <strong>[에이전트 실행]</strong>을 누르면 페이지를 분석해 스킬을 생성합니다.
-          </div>
-        `;
+
       }
     }
 
@@ -278,27 +248,44 @@
         container.innerHTML = '<div class="text-xs text-slate-500 py-8 text-center">저장된 URL 스킬이 없습니다.</div>';
         return;
       }
-      container.innerHTML = skills.map(s => {
+      container.innerHTML = skills.map((s, index) => {
         const isCurrent = s.normalized_url === currentNormUrl;
         return `
           <div class="p-3 rounded-lg border ${isCurrent ? 'bg-indigo-950/40 border-indigo-500/60' : 'bg-slate-900/80 border-slate-800'}">
             <div class="flex items-center justify-between gap-2 mb-1">
-              <span class="text-xs font-bold text-white truncate">${s.site_name || s.skill_id}</span>
+              <span class="text-xs font-bold text-white truncate">${escapeHtml(s.skill_name || s.site_title || s.normalized_url)}</span>
               <span class="text-[10px] px-1.5 py-0.5 rounded ${isCurrent ? 'bg-emerald-500/20 text-emerald-300' : 'bg-slate-800 text-slate-400'}">
                 ${isCurrent ? '현재 URL 일치' : '다른 URL (격리됨)'}
               </span>
             </div>
-            <div class="text-[11px] text-cyan-300 font-mono break-all mb-1.5">${s.normalized_url}</div>
+            <div class="text-[11px] text-cyan-300 font-mono break-all mb-1.5">${escapeHtml(s.normalized_url)}</div>
             <div class="flex items-center justify-between text-[11px] text-slate-400">
               <span>툴 ${(s.tools || []).length}개 · v${s.version || 1}</span>
               <div class="flex gap-2">
-                <button onclick="selectSkillUrl('${s.normalized_url}')" class="text-indigo-400 hover:underline">URL 선택</button>
-                <button onclick="deleteSkill('${s.normalized_url}')" class="text-rose-400 hover:underline">삭제</button>
+                <button onclick="renameSkill(${index})" class="text-indigo-400 hover:underline">이름 변경</button>
+                <button onclick="selectSkillUrl(allSkills[${index}].normalized_url)" class="text-indigo-400 hover:underline">URL 선택</button>
+                <button onclick="deleteSkill(allSkills[${index}].normalized_url)" class="text-rose-400 hover:underline">삭제</button>
               </div>
             </div>
+            <div class="mt-3 space-y-2 border-t border-slate-700 pt-3">${renderActiveSkillTools(s, index)}</div>
           </div>
         `;
       }).join('');
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
+    }
+
+    async function renameSkill(index) {
+      const skill = allSkills[index];
+      const name = window.prompt('이 URL의 이름을 입력하세요', skill.skill_name || skill.site_title || '');
+      if (name === null) return;
+      try {
+        await requestJson('/api/rename-skill', {method:'POST', headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({url:skill.normalized_url, name})});
+        await loadSkills();
+      } catch (error) { document.getElementById('analysis-status').textContent = error.message; }
     }
 
     function selectSkillUrl(url) {
@@ -315,24 +302,22 @@
       loadSkills();
     }
 
-    function renderActiveSkillTools(skill) {
-      const container = document.getElementById('active-tools-container');
+    function renderActiveSkillTools(skill, index) {
       const tools = skill.tools || [];
-      document.getElementById('active-skill-subtitle').textContent = `${skill.normalized_url} (${tools.length}개 툴 활성화)`;
-      container.innerHTML = tools.map(t => {
+      return tools.map(t => {
         const props = (t.parameters && t.parameters.properties) || {};
         const propKeys = Object.keys(props);
         const inputsHtml = propKeys.map(k => `
           <div class="mt-1.5">
             <label class="block text-[10px] text-slate-400">${k} <span class="text-slate-500">(${props[k].description || ''})</span></label>
-            <input id="tool-arg-${t.name}-${k}" type="text" placeholder="${k} 입력" class="w-full bg-slate-950 border border-slate-700 rounded px-2 py-1 text-xs text-white" />
+            <input id="tool-arg-${index}-${t.name}-${k}" type="text" placeholder="${k} 입력" class="w-full bg-slate-950 border border-slate-700 rounded px-2 py-1 text-xs text-white" />
           </div>
         `).join('');
         return `
           <div class="p-3 rounded-lg bg-slate-900/90 border border-slate-800">
             <div class="flex items-center justify-between">
               <span class="text-xs font-bold text-emerald-300 font-mono">${t.name}()</span>
-              <button onclick='invokeToolDirectly(${JSON.stringify(t.name)}, ${JSON.stringify(propKeys)})' class="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-[11px] text-white border border-slate-700">직접 실행</button>
+              <button onclick='invokeToolDirectly(${JSON.stringify(t.name)}, ${JSON.stringify(propKeys)}, ${index})' class="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-[11px] text-white border border-slate-700">${t.display_name || t.name} 실행</button>
             </div>
             <p class="text-[11px] text-slate-300 mt-1">${t.description || ''}</p>
             ${inputsHtml}
@@ -345,11 +330,11 @@
       }).join('');
     }
 
-    async function invokeToolDirectly(toolName, propKeys) {
-      const url = getCurrentUrl();
+    async function invokeToolDirectly(toolName, propKeys, index) {
+      const url = allSkills[index].normalized_url;
       const args = {};
       for (const k of propKeys) {
-        const el = document.getElementById(`tool-arg-${toolName}-${k}`);
+        const el = document.getElementById(`tool-arg-${index}-${toolName}-${k}`);
         if (el && el.value.trim()) args[k] = el.value.trim();
       }
       prependLogCard({
@@ -366,9 +351,9 @@
         status: data.ok ? 'SUCCESS' : 'FAILED',
         normalized_url: url,
         skill_reused: true,
-        retry_count: 0,
-        final_message: data.verification ? data.verification.summary_for_user : (data.error || ''),
-        attempts: [{
+        retry_count: data.retry_count || 0,
+        final_message: data.verification ? data.verification.reason : (data.error || ''),
+        attempts: data.attempts || [{
           attempt: 1,
           tool_call: {tool_name: toolName, arguments: args},
           root_verification: data.verification || {}
@@ -376,27 +361,45 @@
       });
     }
 
+    let analysisBusy = false;
     async function analyzeCurrentUrl(forceResynthesize) {
+      if (analysisBusy) return;
       const url = getCurrentUrl();
-      prependLogCard({
-        title: forceResynthesize ? '🔄 URL 스킬 강제 재합성 중...' : '🔍 URL 판별 및 페이지 분석 중...',
-        body: `대상 URL: ${url}`
-      });
-      const res = await fetch('/api/analyze', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({url, force_resynthesize: forceResynthesize})
-      });
-      const data = await res.json();
-      if (data.status === 'NEEDS_USER_INPUT') {
-        openHitlModal(url, '페이지 분석 및 스킬 생성', data);
-        return;
+      const status = document.getElementById('analysis-status');
+      if (!url) { status.textContent = '분석할 사이트 URL을 입력하세요.'; return; }
+      analysisBusy = true;
+      const buttons = [document.getElementById('analyze-url-btn'), document.getElementById('repair-url-btn')];
+      buttons.forEach(button => button.disabled = true);
+      const started = Date.now();
+      const show = message => status.textContent = `${message} (${Math.floor((Date.now()-started)/1000)}초)`;
+      let message = '분석 요청을 보내는 중입니다.';
+      show(message);
+      const ticker = setInterval(() => show(message), 1000);
+      try {
+        const response = await requestJson('/api/analyze', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({url, force_resynthesize:forceResynthesize})});
+        let job = response.job;
+        if (!job?.id) throw new Error('분석 요청을 시작하지 못했습니다.');
+        while (job.status === 'RUNNING') {
+          message = job.message;
+          show(message);
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          job = (await requestJson('/api/analysis-jobs/' + job.id)).job;
+        }
+        if (job.status !== 'SUCCESS') throw new Error(job.message || '사이트 분석에 실패했습니다.');
+        const data = job.result;
+        await loadSkills();
+        message = `${data.reused ? '기존 스킬을 불러왔습니다.' : '스킬 추출을 완료했습니다.'} 기능 ${data.skill.tools.length}개 · 워크플로우는 별도 화면에서 만들 수 있습니다.`;
+        show(message);
+        prependLogCard({title:'사이트 분석 완료',body:message});
+      } catch (error) {
+        message = error.message || '분석 요청에 실패했습니다.';
+        show(message);
+        prependLogCard({title:'사이트 분석 실패',body:message});
+      } finally {
+        clearInterval(ticker);
+        analysisBusy = false;
+        buttons.forEach(button => button.disabled = false);
       }
-      await loadSkills();
-      prependLogCard({
-        title: data.reused ? '✅ 기존 URL 스킬 매칭 완료 (재사용)' : '✨ 신규 URL 스킬 생성 및 레지스트리 추가 완료',
-        body: `정규화 URL: ${data.normalized_url} | 스킬 ID: ${data.skill?.skill_id} | 툴 수: ${(data.skill?.tools || []).length}개`
-      });
     }
 
     async function executeGoal(userProvidedInput = null) {
@@ -430,6 +433,8 @@
         } else {
           renderExecutionResultCard(data);
         }
+      } catch (error) {
+        prependLogCard({title:'작업 실행 실패',body:error.message});
       } finally {
         btn.disabled = false;
         btn.textContent = '에이전트 실행';
@@ -510,7 +515,9 @@
       const container = document.getElementById('execution-log');
       const card = document.createElement('div');
       card.className = 'p-3 rounded-lg bg-slate-900/70 border border-slate-800 text-xs';
-      card.innerHTML = `<div class="font-semibold text-slate-200">${title}</div><div class="text-slate-400 whitespace-pre-line mt-1">${body}</div>`;
+      const heading = document.createElement('div'); heading.className = 'font-semibold text-slate-200'; heading.textContent = title;
+      const details = document.createElement('div'); details.className = 'text-slate-400 whitespace-pre-line mt-1'; details.textContent = body;
+      card.append(heading, details);
       container.prepend(card);
     }
 
@@ -562,6 +569,6 @@
       loadSkills();
     });
   </script>
-<script src="{{ url_for('static', filename='workflows.js') }}" defer></script>
+
 </body>
 </html>

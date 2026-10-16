@@ -79,6 +79,7 @@
   }
   function renderSaved() {
     const box = document.getElementById('workflow-saved'); box.replaceChildren();
+    if (!state.saved.length) box.append(el('p', '저장된 워크플로우가 없습니다.', 'wf-muted'));
     for (const workflow of state.saved) {
       const row = el('div', '', 'wf-tool'); row.append(el('span', `${workflow.name} · ${workflow.steps.length}단계`));
       row.append(button('불러오기', () => {

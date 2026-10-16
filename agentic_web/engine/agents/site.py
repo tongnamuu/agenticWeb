@@ -1,6 +1,6 @@
 """Single-site worker used by the cross-site root and CLI."""
-from schemas import Synthesis, Decision, Verdict
-from skill_registry import SkillRegistry, URLMatcher
+from agentic_web.engine.schemas import Synthesis, Decision, Verdict
+from agentic_web.engine.skills.registry import SkillRegistry, URLMatcher
 
 SYNTHESIZE = '''Analyze visible page controls and create reusable tools for this URL and task.
 Use declarative Playwright selectors and allowed steps only, never Python/JS code.

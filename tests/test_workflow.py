@@ -1,8 +1,8 @@
 import tempfile
 import unittest
-from schemas import WorkflowDecision, Verdict, Tool, Step
-from skill_registry import SkillRegistry
-from workflow import WorkflowAgent
+from agentic_web.engine.schemas import WorkflowDecision, Verdict, Tool, Step
+from agentic_web.engine.skills.registry import SkillRegistry
+from agentic_web.engine.agents.workflow import WorkflowAgent
 
 TODO = 'https://todo.test/'
 BLOG = 'https://blog.test/'

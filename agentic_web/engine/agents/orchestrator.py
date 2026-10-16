@@ -1,11 +1,14 @@
 import json
 import re
+import time
+from urllib.parse import urljoin, urlparse
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 
-from config import MAX_ROOT_RETRY_COUNT, MODEL_ROLES, get_api_key, get_model_candidates
-from skill_registry import SkillRegistry, URLMatcher
+from agentic_web.config import MAX_ROOT_RETRY_COUNT, MODEL_ROLES, get_api_key, get_model_candidates
+from agentic_web.engine.skills.registry import SkillRegistry, URLMatcher
+from agentic_web.engine.agents.result_verifier import ResultVerificationAgent
 
 
 class GeminiClient:
@@ -39,6 +42,7 @@ class GeminiClient:
 
         candidates = get_model_candidates(role)
         last_err = None
+        deadline = time.monotonic() + 60
 
         for model in candidates:
             endpoints = (
@@ -63,8 +67,13 @@ class GeminiClient:
             payload["generationConfig"] = gen_cfg
 
             for url in endpoints:
+                if time.monotonic() >= deadline:
+                    break
                 try:
-                    resp = requests.post(url, json=payload, timeout=35)
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise TimeoutError('Gemini 응답 대기 시간이 초과됐습니다.')
+                    resp = requests.post(url, json=payload, timeout=(5, min(25, remaining)))
                     if resp.status_code == 200:
                         data = resp.json()
                         data["_model_used"] = model
@@ -172,6 +181,7 @@ class SkillSynthesizerAgent:
             "forms": snapshot.get("forms", []),
             "inputs": snapshot.get("inputs", []),
             "buttons": snapshot.get("buttons", []),
+            "links": snapshot.get("links", []),
             "lists": snapshot.get("lists", []),
             "headings": snapshot.get("headings", []),
             "dynamicHints": snapshot.get("dynamicHints", []),
@@ -253,6 +263,21 @@ class SkillSynthesizerAgent:
                 "verification": {"type": "read_only", "description": "페이지 상태 읽기 확인"},
             }
         )
+
+        # Navigation is a URL-bound capability, not completion of the user's goal.
+        origin=urlparse(snapshot.get('url',''))
+        for index, link in enumerate(snapshot.get('links',[])[:25]):
+            href=urljoin(snapshot.get('url',''),link.get('href',''))
+            parsed=urlparse(href)
+            if parsed.scheme not in ('http','https') or parsed.netloc!=origin.netloc:
+                continue
+            label=link.get('text') or link.get('accessible_name') or ''
+            if not label or re.search(r'logout|sign.?out|delete|로그아웃|삭제',label+' '+href,re.I):
+                continue
+            tools.append({'name':f'open_page_{index}', 'display_name':label+' 페이지 열기',
+                'description':f'현재 페이지의 {label} 링크로 이동합니다. 작업 완료가 아니며 도착 URL의 스킬을 다시 선택해야 합니다.',
+                'parameters':{'type':'object','properties':{},'required':[]},
+                'steps':[{'op':'navigate','url':href}], 'verification':{'type':'read_only'}})
 
         # 2. Group inputs by inline button or form
         grouped_inputs: Dict[str, List[Dict[str, Any]]] = {}
@@ -660,7 +685,10 @@ class SkillExecutorAgent:
                     retry_context=retry_context,
                 )
             except Exception as e:
-                print(f"[SkillExecutorAgent] Gemini function calling fallback: {e}")
+                if execution_steps:
+                    return {"executor_model":"Gemini", "steps":execution_steps,
+                            "agent_message":"실행 중 오류가 발생했습니다. 결과 확인이 필요합니다."}
+                print("[SkillExecutorAgent] Gemini tool selection failed")
 
         return self._execute_via_heuristic_planner(
             user_prompt=effective_prompt,
@@ -770,6 +798,7 @@ class SkillExecutorAgent:
                 exec_out = browser_session.execute_tool(tool_def, fn_args)
                 step_record = {
                     "tool_name": fn_name,
+                    "operations": tool_def.get("steps", []),
                     "display_name": tool_def.get("display_name", fn_name),
                     "args": fn_args,
                     "action_result": exec_out["action_result"],
@@ -787,6 +816,9 @@ class SkillExecutorAgent:
                         }
                     }
                 )
+                if not URLMatcher.is_exact_url_match(browser_session.current_url,current_state['url']):
+                    return {'executor_model':f'Gemini ({model_used})','steps':execution_steps,
+                            'agent_message':agent_message,'url_changed':True}
                 if exec_out["action_result"].get("failure_code") in ("LOGIN_REQUIRED", "PERMISSION_DENIED"):
                     hit_auth_wall = True
                     break
@@ -876,13 +908,8 @@ class SkillExecutorAgent:
                         arg_key = p_keys[0] if p_keys else "text"
                         planned_calls.append({"name": t["name"], "args": {arg_key: val}})
 
-        if not planned_calls and url_tools:
-            # Default to best matching tool
-            first_mutating = next((t for t in url_tools if t["name"] != "get_page_state"), url_tools[0])
-            p_keys = list(first_mutating.get("parameters", {}).get("properties", {}).keys())
-            args = {p_keys[0]: quoted[0] if quoted else user_prompt} if p_keys else {}
-            planned_calls.append({"name": first_mutating["name"], "args": args})
-
+        # Without a matched capability, execute nothing. A random tool or a read-only
+        # fallback cannot substitute for the requested mutation.
         for call in planned_calls:
             tool_def = tool_map.get(call["name"])
             if not tool_def:
@@ -891,6 +918,7 @@ class SkillExecutorAgent:
             execution_steps.append(
                 {
                     "tool_name": call["name"],
+                    "operations": tool_def.get("steps", []),
                     "display_name": tool_def.get("display_name", call["name"]),
                     "args": call["args"],
                     "action_result": exec_out["action_result"],
@@ -931,6 +959,7 @@ class RootOrchestratorAgent:
         self.synthesizer = SkillSynthesizerAgent(self.client)
         self.executor = SkillExecutorAgent(self.client)
         self.max_retry_count = MAX_ROOT_RETRY_COUNT
+        self.result_verifier = ResultVerificationAgent(self.client)
 
     def set_api_key(self, api_key: str) -> None:
         self.client.set_api_key(api_key)
@@ -941,11 +970,14 @@ class RootOrchestratorAgent:
         browser_session: Any,
         force_resynthesize: bool = False,
         failure_feedback: Optional[str] = None,
+        progress=None,
     ) -> Dict[str, Any]:
         """
         Navigates to `target_url` (if needed), checks `SkillRegistry` strictly by normalized URL,
         and either reuses the existing Skill for that URL or synthesizes & registers a new Skill.
         """
+        notify = progress or (lambda message: None)
+        notify('브라우저에서 페이지를 여는 중입니다.')
         current_norm = URLMatcher.normalize_url(browser_session.current_url)
         target_norm = URLMatcher.normalize_url(target_url)
 
@@ -958,6 +990,7 @@ class RootOrchestratorAgent:
         screenshot = page_info["screenshot"]
         actual_url = snapshot.get("url") or target_url
 
+        notify('페이지를 읽었습니다. 등록된 스킬과 URL을 비교하는 중입니다.')
         # Strict URL check against SkillRegistry
         existing_tools, existing_pkg, routing_decision = self.registry.get_tools_strictly_for_url(actual_url)
 
@@ -973,10 +1006,12 @@ class RootOrchestratorAgent:
             }
 
         # Cache miss (or forced repair during retry loop) -> Synthesize & Register into SkillRegistry
+        notify('Gemini가 페이지를 분석하고 스킬을 추출하는 중입니다.')
         tools, generator_source = self.synthesizer.synthesize_tools(
             snapshot=snapshot,
             failure_feedback=failure_feedback,
         )
+        notify('추출한 스킬을 등록하는 중입니다.')
         skill_pkg = self.registry.register_skill(
             target_url=actual_url,
             tools=tools,
@@ -1005,173 +1040,10 @@ class RootOrchestratorAgent:
             "screenshot": screenshot,
         }
 
-    def verify_execution(
-        self,
-        user_prompt: str,
-        before_snapshot: Dict[str, Any],
-        after_snapshot: Dict[str, Any],
-        steps: List[Dict[str, Any]],
-    ) -> Dict[str, Any]:
-        """
-        Root Agent Post-Execution Verification:
-        Checks whether the execution genuinely fulfilled the user's request.
-        Returns structured verdict:
-        - `success`: bool
-        - `status`: "SUCCESS" | "FAILED" | "NEEDS_USER_INPUT"
-        - `failure_code`: Optional[str]
-        - `reason`: str
-        - `evidence`: List[str]
-        - `verifier_model`: str
-        """
-        if not steps:
-            return {
-                "success": False,
-                "status": "FAILED",
-                "failure_code": "NO_STEPS_EXECUTED",
-                "reason": "실행된 스킬 도구가 없습니다. 도구 매칭 또는 셀렉터 재분석이 필요합니다.",
-                "evidence": [],
-                "verifier_model": "Root Deterministic Verifier",
-            }
-
-        # 1. Check if any step hit LOGIN_REQUIRED / PERMISSION_DENIED
-        for s in steps:
-            f_code = s["action_result"].get("failure_code") or s["verification"].get("failure_code")
-            if f_code in ("LOGIN_REQUIRED", "PERMISSION_DENIED"):
-                f_reason = s["action_result"].get("failure_reason") or s["verification"].get("failure_reason") or "로그인이 필요합니다."
-                return {
-                    "success": False,
-                    "status": "NEEDS_USER_INPUT",
-                    "failure_code": "LOGIN_REQUIRED",
-                    "reason": f_reason,
-                    "evidence": [f"[{s['display_name']}] {f_reason}"],
-                    "verifier_model": "Root Auth Gate Verifier",
-                }
-
-        # 2. Check deterministic step success & DOM evidence
-        all_steps_succeeded = all(s["action_result"].get("success", False) for s in steps)
-        evidence: List[str] = []
-        failed_reasons: List[str] = []
-
-        for idx, s in enumerate(steps, 1):
-            ar = s["action_result"]
-            ver = s["verification"]
-            if ar.get("success"):
-                changes_str = ", ".join(ver.get("changes", [])) or "정상 실행"
-                evidence.append(f"Step {idx} [{s['display_name']}]: {ar.get('message')} ({changes_str})")
-            else:
-                reason_str = ar.get("failure_reason") or ver.get("failure_reason") or "실행 실패"
-                failed_reasons.append(f"Step {idx} [{s['display_name']}] 실패 ({ar.get('failure_code')}): {reason_str}")
-
-        if not all_steps_succeeded:
-            primary_fail_code = next(
-                (s["action_result"].get("failure_code") for s in steps if not s["action_result"].get("success")),
-                "VERIFICATION_FAILED",
-            )
-            return {
-                "success": False,
-                "status": "FAILED",
-                "failure_code": primary_fail_code,
-                "reason": " / ".join(failed_reasons),
-                "evidence": evidence + failed_reasons,
-                "verifier_model": "Root Deterministic DOM Verifier",
-            }
-
-        # 3. Optional Gemini Root Verifier check (`root_verifier` role -> gemini-2.5-pro)
-        verifier_model = "Root Deterministic DOM Verifier"
-        if self.client.has_key:
-            try:
-                llm_verdict, model_used = self._verify_with_gemini_root(
-                    user_prompt=user_prompt,
-                    before_snapshot=before_snapshot,
-                    after_snapshot=after_snapshot,
-                    steps=steps,
-                )
-                verifier_model = f"Root Verifier Agent ({model_used})"
-                if llm_verdict.get("requires_login"):
-                    return {
-                        "success": False,
-                        "status": "NEEDS_USER_INPUT",
-                        "failure_code": "LOGIN_REQUIRED",
-                        "reason": llm_verdict.get("reason", "사이트 로그인이 필요합니다."),
-                        "evidence": evidence,
-                        "verifier_model": verifier_model,
-                    }
-                if not llm_verdict.get("is_success", True) and not all_steps_succeeded:
-                    return {
-                        "success": False,
-                        "status": "FAILED",
-                        "failure_code": "GOAL_NOT_MET",
-                        "reason": llm_verdict.get("reason", "요청한 목표가 화면에 완전히 반영되지 않았습니다."),
-                        "evidence": evidence,
-                        "verifier_model": verifier_model,
-                    }
-                if llm_verdict.get("reason"):
-                    return {
-                        "success": True,
-                        "status": "SUCCESS",
-                        "failure_code": None,
-                        "reason": llm_verdict["reason"],
-                        "evidence": evidence,
-                        "verifier_model": verifier_model,
-                    }
-            except Exception as e:
-                print(f"[RootAgent] Gemini root verification fallback: {e}")
-
-        return {
-            "success": True,
-            "status": "SUCCESS",
-            "failure_code": None,
-            "reason": f"총 {len(steps)}개 스킬 도구 실행 및 DOM 상태 반영 검증 완료",
-            "evidence": evidence,
-            "verifier_model": verifier_model,
-        }
-
-    def _verify_with_gemini_root(
-        self,
-        user_prompt: str,
-        before_snapshot: Dict[str, Any],
-        after_snapshot: Dict[str, Any],
-        steps: List[Dict[str, Any]],
-    ) -> Tuple[Dict[str, Any], str]:
-        system_prompt = """당신은 브라우저 에이전트 시스템의 Root Verifier Agent입니다.
-사용자 요청(`user_prompt`), 실행된 도구 스텝 로그(`steps`), 그리고 실행 전후의 페이지 목록/상태를 비교하여 작업이 실제로 성공했는지 판별하세요.
-
-응답 JSON 형식:
-{
-  "is_success": true,
-  "requires_login": false,
-  "reason": "성공 또는 실패 판단 근거를 한국어로 명확히 설명"
-}"""
-        payload_summary = {
-            "user_prompt": user_prompt,
-            "steps": [
-                {
-                    "tool": s["tool_name"],
-                    "args": s["args"],
-                    "success": s["action_result"].get("success"),
-                    "changes": s["verification"].get("changes", []),
-                    "failure_reason": s["action_result"].get("failure_reason"),
-                }
-                for s in steps
-            ],
-            "before_lists": before_snapshot.get("lists", []),
-            "after_lists": after_snapshot.get("lists", []),
-            "after_headings": after_snapshot.get("headings", []),
-        }
-        res = self.client.generate(
-            role="root_verifier",
-            contents=[{"role": "user", "parts": [{"text": json.dumps(payload_summary, ensure_ascii=False)}]}],
-            system_instruction=system_prompt,
-            json_mode=True,
-            temperature=0.0,
-        )
-        raw_text = (
-            res.get("candidates", [{}])[0]
-            .get("content", {})
-            .get("parts", [{}])[0]
-            .get("text", "{}")
-        )
-        return json.loads(raw_text), res.get("_model_used", "gemini-2.5-pro")
+    def verify_execution(self, user_prompt, before_snapshot, after_snapshot, steps, browser_session=None):
+        """Delegate result checking to an agent independent of the executor."""
+        return self.result_verifier.verify(user_prompt, before_snapshot, after_snapshot,
+                                           steps, browser_session=browser_session)
 
     def run_task(
         self,
@@ -1351,15 +1223,20 @@ class RootOrchestratorAgent:
                 skill_pkg = repaired_res["skill_package"]
                 routing_decision = repaired_res["routing_decision"]
 
-            exec_out = self.executor.execute_with_url_tools(
-                user_prompt=user_prompt,
-                browser_session=browser_session,
-                url_tools=url_tools,
-                user_inputs=provided_inputs,
-                retry_context=retry_context,
-            )
-            executor_model_used = exec_out["executor_model"]
-            attempt_steps = list(exec_out["steps"])
+            attempt_steps = []
+            for route_turn in range(8):
+                exec_out = self.executor.execute_with_url_tools(
+                    user_prompt=user_prompt, browser_session=browser_session, url_tools=url_tools,
+                    user_inputs=provided_inputs, retry_context=retry_context)
+                executor_model_used = exec_out['executor_model']
+                attempt_steps.extend(exec_out['steps'])
+                if not exec_out.get('url_changed'):
+                    break
+                next_res = self.analyze_and_register_url_skill(
+                    target_url=browser_session.current_url,browser_session=browser_session)
+                url_tools=next_res['tools']
+                skill_pkg=next_res['skill_package']
+                retry_context='이전 실행: '+json.dumps(attempt_steps,ensure_ascii=False)+'. 완료된 변경은 반복하지 마세요.'
             if attempt_idx == 1 and login_step_record:
                 attempt_steps = [login_step_record] + attempt_steps
 
@@ -1372,6 +1249,7 @@ class RootOrchestratorAgent:
                 before_snapshot=before_snapshot,
                 after_snapshot=after_snapshot,
                 steps=attempt_steps,
+                browser_session=browser_session,
             )
 
             attempts_log.append(

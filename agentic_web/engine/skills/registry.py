@@ -7,8 +7,13 @@ from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Tuple
 from urllib.parse import urlparse, urlunparse
 
-from config import SKILLS_STORE_DIR
-from schemas import Tool
+from agentic_web.config import SKILLS_STORE_DIR
+from agentic_web.engine.schemas import Tool
+from agentic_web.engine.storage import (
+    FIRESTORE_SKILLS_COLLECTION,
+    ScopedFirestoreCollection,
+    resolve_store_scope,
+)
 
 
 def validate_tool(tool):
@@ -213,7 +218,7 @@ class SkillRegistry:
         usage_count = existing.get("usage_count", 0) if existing else 0
 
         parsed = urlparse(norm_url)
-        default_name = skill_name or site_title or f"{parsed.netloc}{parsed.path} 전용 스킬"
+        default_name = skill_name or (existing or {}).get("custom_name") or site_title or f"{parsed.netloc}{parsed.path} 전용 스킬"
         default_desc = description or f"URL [{norm_url}] 전용 브라우저 제어 스킬 패키지 ({len(tools)}개 Tool 포함)"
 
         # Stamp each tool with its bound normalized_url so it can never be called on a mismatched URL
@@ -227,6 +232,7 @@ class SkillRegistry:
         skill_package: Dict[str, Any] = {
             "skill_id": skill_id,
             "skill_name": default_name,
+            "custom_name": (existing or {}).get("custom_name"),
             "description": default_desc,
             "target_url": target_url,
             "normalized_url": norm_url,
@@ -244,6 +250,19 @@ class SkillRegistry:
         self._skills_by_url[norm_url] = skill_package
         self._save_index()
         return skill_package
+
+    def rename_skill(self, target_url: str, name: str) -> Dict[str, Any]:
+        name = name.strip() if isinstance(name, str) else ''
+        if not name or len(name) > 100:
+            raise ValueError('이름은 1~100자로 입력하세요.')
+        pkg, _ = self.resolve_skill_by_url(target_url)
+        if pkg is None:
+            raise KeyError('등록된 URL이 없습니다.')
+        updated = dict(pkg, skill_name=name, custom_name=name, updated_at=datetime.now().isoformat())
+        atomic_json(os.path.join(self.store_dir, f"{pkg['skill_id']}.json"), updated)
+        self._skills_by_url[pkg['normalized_url']] = updated
+        self._save_index()
+        return updated
 
     def increment_usage(self, target_url: str) -> None:
         norm_url = URLMatcher.normalize_url(target_url)

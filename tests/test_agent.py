@@ -1,8 +1,8 @@
 import tempfile
 import unittest
-from site_agent import RootAgent
-from schemas import Decision, Verdict, Synthesis, Tool, Step
-from skill_registry import SkillRegistry, URLMatcher
+from agentic_web.engine.agents.site import RootAgent
+from agentic_web.engine.schemas import Decision, Verdict, Synthesis, Tool, Step
+from agentic_web.engine.skills.registry import SkillRegistry, URLMatcher
 
 URL = 'https://example.com/todos'
 TOOL = Tool(name='add', description='Add todo', steps=[Step(action='click', selector='#add')])
@@ -41,7 +41,7 @@ class Tests(unittest.TestCase):
 
     def test_gemini_developer_api_schema_has_no_additional_properties(self):
         import json
-        from schemas import WorkflowDecision
+        from agentic_web.engine.schemas import WorkflowDecision
         for model_cls in (Synthesis, Decision, Verdict, WorkflowDecision):
             schema_json = json.dumps(model_cls.model_json_schema())
             self.assertNotIn('additionalProperties', schema_json)

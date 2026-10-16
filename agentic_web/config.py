@@ -2,11 +2,17 @@ import os
 from typing import Dict, List
 from dotenv import load_dotenv
 
-load_dotenv(override=False)
-
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+load_dotenv(os.path.join(BASE_DIR, ".env"), override=False)
 SKILLS_STORE_DIR = os.path.join(BASE_DIR, "skills_store")
+WORKFLOWS_STORE_DIR = os.path.join(BASE_DIR, "workflows_store")
 REGISTRY_INDEX_PATH = os.path.join(SKILLS_STORE_DIR, "registry_index.json")
+
+# GCP Cloud Firestore configuration (used on Cloud Run or when USE_FIRESTORE=true)
+FIRESTORE_PROJECT_ID = os.environ.get("FIRESTORE_PROJECT_ID", os.environ.get("GOOGLE_CLOUD_PROJECT", "")).strip()
+FIRESTORE_DATABASE = os.environ.get("FIRESTORE_DATABASE", "(default)").strip()
+FIRESTORE_SKILLS_COLLECTION = os.environ.get("FIRESTORE_SKILLS_COLLECTION", "agentic_web_skills").strip()
+FIRESTORE_WORKFLOWS_COLLECTION = os.environ.get("FIRESTORE_WORKFLOWS_COLLECTION", "agentic_web_workflows").strip()
 
 os.makedirs(SKILLS_STORE_DIR, exist_ok=True)
 
@@ -15,7 +21,7 @@ def get_api_key(override_key: str = "") -> str:
     """Retrieves the Gemini API Key from argument or environment."""
     if override_key and override_key.strip():
         return override_key.strip()
-    load_dotenv(override=False)
+    load_dotenv(os.path.join(BASE_DIR, ".env"), override=False)
     return (
         os.environ.get("GEMINI_API_KEY")
         or os.environ.get("GOOGLE_API_KEY")

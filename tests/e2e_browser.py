@@ -17,8 +17,19 @@ import threading
 import time
 from werkzeug.serving import make_server
 
-from app import app
-from agent import browser_session, orchestrator
+import tempfile
+from flask import Flask
+from agentic_web.engine.browser.cdp import BrowserSession
+from agentic_web.engine.agents.orchestrator import RootOrchestratorAgent
+from agentic_web.engine.skills.registry import SkillRegistry
+from tests.fixtures.demo_pages import DEMO_BLOG_HTML, DEMO_PROTECTED_HTML
+
+app = Flask(__name__)
+_test_store = tempfile.TemporaryDirectory(prefix='agenticweb-e2e-')
+browser_session = BrowserSession(headless=True)
+orchestrator = RootOrchestratorAgent(registry=SkillRegistry(_test_store.name))
+app.add_url_rule('/demo-blog', 'demo_blog', lambda: DEMO_BLOG_HTML)
+app.add_url_rule('/demo-protected', 'demo_protected', lambda: DEMO_PROTECTED_HTML)
 
 
 TEST_TODO_HTML = """<!DOCTYPE html>
@@ -190,6 +201,7 @@ def run_all_verifications():
         orchestrator.registry.delete_skill_by_url(protected_url)
         browser_session.close()
         srv.stop()
+        _test_store.cleanup()
 
 
 if __name__ == "__main__":

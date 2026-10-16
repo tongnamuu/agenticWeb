@@ -1,0 +1,1 @@
+"""Gemini web automation application."""

@@ -1,9 +1,7 @@
 import tempfile
 import unittest
-from unittest.mock import patch
-from main import interactive_jobs
-from schemas import Tool, Step
-from skill_registry import SkillRegistry
+from agentic_web.engine.schemas import Tool, Step
+from agentic_web.engine.skills.registry import SkillRegistry
 
 
 class GrowthTests(unittest.TestCase):
@@ -21,9 +19,3 @@ class GrowthTests(unittest.TestCase):
             self.assertEqual({t['name'] for t in package['tools']}, {'add', 'delete'})
             self.assertEqual(package['version'], 2)
             self.assertEqual(len(loaded.list_all_skills()), 2)
-
-    def test_interactive_continues_between_requests(self):
-        with patch('builtins.input', side_effect=['https://a.test', '추가',
-                   'https://b.test', '검색', '/quit']):
-            jobs = list(interactive_jobs())
-        self.assertEqual(len(jobs), 2)

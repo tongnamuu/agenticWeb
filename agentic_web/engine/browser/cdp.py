@@ -13,12 +13,16 @@ from urllib.parse import urljoin, urlparse
 import requests
 import websocket
 
-from skill_registry import URLMatcher
+from agentic_web.engine.skills.registry import URLMatcher
 
 
 CHROME_PATHS = [
     "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
     "/Applications/Chromium.app/Contents/MacOS/Chromium",
+    "/usr/bin/google-chrome-stable",
+    "/usr/bin/google-chrome",
+    "/usr/bin/chromium",
+    "/usr/bin/chromium-browser",
 ]
 
 ALLOWED_PRIMITIVES = {
@@ -87,9 +91,11 @@ class BrowserSession:
         if self.ws is not None and self.ws.connected:
             return
 
-        chrome_bin = next((p for p in CHROME_PATHS if os.path.exists(p)), None)
+        env_chrome = os.environ.get("CHROME_BIN", "").strip()
+        candidate_paths = ([env_chrome] if env_chrome else []) + CHROME_PATHS
+        chrome_bin = next((p for p in candidate_paths if p and os.path.exists(p)), None)
         if not chrome_bin:
-            raise RuntimeError("Google Chrome binary not found in /Applications.")
+            raise RuntimeError("Google Chrome / Chromium binary not found.")
 
         self.port = _find_free_port()
         if not self.user_data_dir:
@@ -102,6 +108,9 @@ class BrowserSession:
             f"--user-data-dir={self.user_data_dir}",
             "--no-first-run",
             "--no-default-browser-check",
+            "--no-sandbox",
+            "--disable-dev-shm-usage",
+            "--disable-gpu",
             "--window-size=1280,900",
             "about:blank",
         ]
@@ -197,7 +206,19 @@ class BrowserSession:
             except Exception:
                 pass
             time.sleep(0.2)
-        time.sleep(0.35)
+        # SPA shells can finish document loading before their data/UI appears.
+        # Do not synthesize a read-only skill from a transient "Loading..." page.
+        self.evaluate_js(r"""async () => {
+            const deadline = Date.now() + 8000;
+            while (Date.now() < deadline) {
+                const main = document.querySelector('main, [role="main"]') || document.body;
+                const text = (main?.innerText || '').trim();
+                const loading = /^(loading[.\s…]*|로드 중[.\s…]*|불러오는 중[.\s…]*)$/i.test(text);
+                if (document.readyState === 'complete' && text && !loading) return true;
+                await new Promise(resolve => setTimeout(resolve, 200));
+            }
+            return false;
+        }""")
 
         self.current_url = self.evaluate_js("() => window.location.href") or url
         return self.inspect_page()
@@ -488,6 +509,7 @@ class BrowserSession:
                     lists: collections,
                     headings,
                     bodyTextSample,
+                    bodyText: (document.body ? document.body.innerText : "").slice(0, 24000),
                     authState,
                     dynamicHints
                 };
@@ -578,6 +600,12 @@ class BrowserSession:
         has_mutating_op = False
 
         for step in steps:
+            live_url=self.evaluate_js('() => window.location.href')
+            if bound_url and not URLMatcher.is_exact_url_match(live_url,bound_url):
+                all_ok=False
+                failure_code='URL_MISMATCH_BLOCKED'
+                failure_reason='페이지가 이동되어 이전 URL의 도구 실행을 중단했습니다.'
+                break
             raw_op = (step.get("op") or step.get("action_type") or "read_state").lower()
             if raw_op not in ALLOWED_PRIMITIVES:
                 all_ok = False
