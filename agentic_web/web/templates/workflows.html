@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="csrf-token" content="{{ csrf_token() }}">
+  <script src="{{ url_for('static', filename='auth.js') }}" defer></script>
+  <title>Gemini URL-Skill Web Agent Studio</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    .wf-panel {margin:20px 24px;padding:20px;border:1px solid #334155;border-radius:12px;background:#0f172a;}
+    .wf-heading,.wf-tool,.wf-actions {display:flex;align-items:center;justify-content:space-between;gap:12px;}
+    .wf-heading {margin-bottom:12px;} .wf-grid {display:grid;grid-template-columns:1fr 1fr;gap:24px;}
+    .wf-panel h2,.wf-panel h3 {font-weight:700;margin-bottom:8px;} .wf-panel h2 {font-size:18px;}
+    .wf-scroll {max-height:420px;overflow:auto;margin:10px 0;} .wf-site {padding:12px;border:1px solid #334155;border-radius:8px;margin-bottom:10px;background:#111c30;}
+    .wf-tool {padding:10px 0;border-bottom:1px solid #263449;font-size:13px;} .wf-tool>div {min-width:0;}
+    .wf-muted {font-size:12px;color:#94a3b8;margin:6px 0;white-space:pre-wrap;overflow-wrap:anywhere;}
+    .wf-url {font-size:12px;color:#67e8f9;overflow-wrap:anywhere;} .wf-button {padding:6px 10px;border:1px solid #475569;border-radius:6px;font-size:12px;white-space:nowrap;background:#1e293b;}
+    .wf-button:hover {background:#334155;} .wf-button:disabled {opacity:.35;cursor:default;} .wf-primary {background:#4f46e5;} .wf-label {display:block;font-size:12px;color:#cbd5e1;margin:10px 0;}
+    .wf-input {display:block;width:100%;padding:8px;border:1px solid #475569;border-radius:6px;background:#020617;color:#fff;margin-top:4px;}
+    @media(max-width:800px){.wf-grid{grid-template-columns:1fr;}.wf-panel{margin:12px;}.wf-tool{flex-wrap:wrap;}}
+    body { background: #090d16; color: #e2e8f0; font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, sans-serif; }
+    .glass { background: rgba(15, 23, 42, 0.88); border: 1px solid rgba(51, 65, 85, 0.75); }
+    .code-scroll::-webkit-scrollbar { width: 6px; height: 6px; }
+    .code-scroll::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+  </style>
+</head>
+<body class="min-h-screen flex flex-col">
+{% include '_header.html' %}
+<div class="studio-shell">
+{% include '_navigation.html' %}
+<main class="studio-content" aria-labelledby="workflow-tab">
+  <section class="wf-panel" aria-label="워크플로우 편집기">
+    <div class="wf-heading"><div><h2>워크플로우 만들기</h2><p class="wf-muted">사이트별 기능을 골라 원하는 순서로 연결하세요. 예: 할 일 추가 → 블로그 작성 → 할 일 완료</p></div><button type="button" class="wf-button" id="workflow-refresh">새로고침</button></div>
+    <div class="wf-grid">
+      <div><h3>등록된 사이트와 스킬</h3><div id="workflow-catalog" class="wf-scroll"></div></div>
+      <div><div class="wf-heading"><h3>워크플로우 만들기 <span id="workflow-step-count" class="wf-muted">0단계</span></h3><button type="button" class="wf-button" id="workflow-new">새로 만들기</button></div>
+        <label class="wf-label">워크플로우 이름<input id="workflow-name" class="wf-input" placeholder="블로그 작성 후 할 일 완료" maxlength="200"></label>
+        <div id="workflow-steps" class="wf-scroll"></div>
+        <div class="wf-actions" style="justify-content:flex-start;flex-wrap:wrap">
+          <button type="button" class="wf-button" id="workflow-save">워크플로우 저장</button>
+          <button type="button" class="wf-button wf-primary" id="workflow-run">저장하고 실행 ▶</button>
+        </div>
+        <p class="wf-muted">현재 입력값과 순서를 저장한 뒤 1단계부터 실행합니다.</p>
+        <p id="workflow-message" role="status" aria-live="polite" class="wf-muted"></p>
+        <h3>저장된 워크플로우</h3><div id="workflow-saved"></div>
+        <h3 style="margin-top:20px">실행 결과</h3><p id="workflow-verdict" role="status" style="font-size:18px;font-weight:700;padding:12px;border:1px solid #475569;border-radius:8px">실행 전</p><div id="workflow-result" aria-live="polite"></div>
+      </div>
+    </div>
+  </section>
+</main></div>
+<script src="{{ url_for('static', filename='workflows.js') }}" defer></script>
+</body></html>

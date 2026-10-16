@@ -47,11 +47,11 @@ class GoogleAuthTests(unittest.TestCase):
             self.assertEqual(self.client.get('/auth/google/callback?code=fake&state=forged').status_code,400)
             fetch.assert_not_called()
 
-    def callback(self, audience='test-client', nonce='expected', expired=False, wrong_signature=False):
+    def callback(self, audience='test-client', nonce='expected', expired=False, wrong_signature=False, subject='google-user-123', email='test@example.com'):
         key=RSAKey.generate_key(2048)
-        claims={'iss':'https://accounts.google.com','sub':'google-user-123','aud':audience,
+        claims={'iss':'https://accounts.google.com','sub':subject,'aud':audience,
             'iat':int(time.time())-1000,'exp':int(time.time())+300 if not expired else int(time.time())-500,
-            'nonce':nonce,'email':'test@example.com','email_verified':True,'name':'Test'}
+            'nonce':nonce,'email':email,'email_verified':True,'name':'Test'}
         token=jwt.encode({'alg':'RS256','kid':'test-key'},claims,key)
         with self.client.session_transaction() as session:
             self.provider.framework.set_state_data(session,'valid-state',{'nonce':'expected','redirect_uri':self.app.config['GOOGLE_REDIRECT_URI']})
@@ -100,3 +100,10 @@ class GoogleAuthTests(unittest.TestCase):
     def test_nonlocal_http_callback_is_rejected(self):
         with self.assertRaises(ValueError):
             create_app({'SECRET_KEY':'test','GOOGLE_REDIRECT_URI':'http://evil.test/auth/google/callback'})
+
+    def test_external_accounts_are_not_restricted_to_owner_or_domain(self):
+        for subject, email in [('personal-user', 'person@gmail.com'), ('company-user', 'person@company.example')]:
+            with self.subTest(email=email):
+                self.assertEqual(self.callback(subject=subject, email=email).status_code, 302)
+                self.assertEqual(self.client.get('/auth/me').json['user']['id'], subject)
+                self.assertEqual(self.client.get('/auth/me').json['user']['email'], email)

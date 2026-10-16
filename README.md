@@ -27,7 +27,9 @@ python app.py
 3. 사이트 카드 아래에서 스킬의 입력값을 채우고 실행합니다. 호출할 때는 경로·쿼리·해시까지 정확히 일치하는 URL의 도구만 선택합니다.
 4. 독립 결과 확인 에이전트가 저장된 결과를 다시 읽어 성공 여부를 판단합니다. 검증이 불확실한 변경을 무조건 중복 실행하지 않습니다.
 
-워크플로우 화면과 API는 제거했습니다. 분석 중에는 테스트 글이나 할 일을 생성하지 않습니다.
+워크플로우 탭(`/workflows`)에서는 등록된 스킬을 단계로 추가하고 입력값·실행 순서를 정해 저장합니다. 서로 다른 사이트의 스킬도 연결할 수 있으며, 분석만으로 워크플로우가 자동 생성되지는 않습니다. 저장 목록에서 실행하면 현재 단계와 검증 결과를 표시합니다. 로그인 대기는 실행기 브라우저에서 처리한 뒤 해당 단계부터 재개하고, 실패하면 후속 단계를 실행하지 않습니다. 스킬 정의가 바뀌면 워크플로우를 다시 저장해야 합니다.
+
+워크플로우 정의는 사용자별로 저장하며 Firestore 활성화 시 `agentic_web_workflows` 컬렉션을 사용합니다. 실행 상태와 재개 정보는 서버 메모리에 있어 재시작하면 사라집니다. 단계 간 결과를 변수로 전달하는 기능은 아직 없으며, 각 단계의 입력값을 직접 지정합니다. 분석 중에는 테스트 글이나 할 일을 생성하지 않습니다.
 
 ## 저장과 현재 범위
 
@@ -112,3 +114,22 @@ FLASK_SECRET_KEY=충분히-긴-임의의-비밀값
 사이트 분석과 스킬 실행은 `/` 화면에서 제공합니다. 분석 버튼을 누르면 접수·페이지 열기·Gemini 분석·등록 단계를 경과 시간과 함께 표시하며 실패 이유도 표시합니다. 데모 페이지는 `tests/fixtures/`에만 두고 테스트 실행은 임시 저장소를 사용합니다.
 
 결과 확인은 `engine/agents/result_verifier.py`의 독립 에이전트가 담당합니다. 실행기의 성공 플래그는 작업 완료 근거로 사용하지 않습니다. 변경 작업은 페이지를 다시 열어 저장된 결과를 읽고, 요청별 조건과 실제 관찰 문자열을 대조합니다. Gemini 검증 실패·누락된 근거·조회만 수행한 변경 요청은 성공 처리하지 않습니다. 작성 페이지처럼 URL이 바뀌면 해당 URL의 스킬을 다시 선택합니다.
+
+### 모든 사용자의 Google 로그인
+
+일반 사용자는 웹사이트의 Google 로그인 버튼을 이용합니다. gcloud 로그인과 GCP 프로젝트 권한은 배포 관리자에게만 필요합니다. 앱은 특정 이메일이나 조직으로 사용자를 제한하지 않으며 Google의 검증된 사용자 ID로 데이터를 분리합니다.
+
+Google Auth Platform의 **Audience → External**을 사용하고, 운영 공개 시 Branding 구성을 완료한 뒤 **In production** 상태를 확인하세요. `openid email profile`만 요청하는 로그인은 Testing 상태에서도 테스트 사용자 목록 제한의 예외 대상입니다. 조직 계정은 해당 Workspace 관리자의 앱 허용 정책에 영향을 받을 수 있습니다.
+
+공식 안내: https://developers.google.com/identity/protocols/oauth2/production-readiness/overview
+
+Cloud Run 배포에는 웹 애플리케이션 OAuth 클라이언트의 `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, 고정된 `FLASK_SECRET_KEY`가 필요합니다. `deploy.sh`는 누락 시 중단하고, 배포 후 서비스 주소의 `/auth/google/callback`을 설정합니다. 출력된 콜백 주소를 Google OAuth 클라이언트의 승인된 리디렉션 URI에도 등록해야 합니다. 이 콘솔 설정은 Git 푸시로 변경되지 않습니다.
+
+### 로컬과 Cloud Run 콜백
+
+동일한 웹 OAuth 클라이언트의 승인된 리디렉션 URI에 다음 주소를 각각 등록합니다.
+
+- `http://127.0.0.1:5055/auth/google/callback`
+- `https://agentic-web-800515339243.asia-northeast3.run.app/auth/google/callback`
+
+로컬 `.env`의 `GOOGLE_REDIRECT_URI`는 로컬 주소로 유지합니다. `deploy.sh`는 별도의 `GOOGLE_DEPLOY_REDIRECT_URI`를 Cloud Run의 `GOOGLE_REDIRECT_URI`에 전달합니다. 미설정 시 서비스 이름·프로젝트 번호·리전으로 배포 콜백을 구성합니다. 임시 placeholder 주소는 사용하지 않습니다. OAuth 설정의 콜백 등록은 환경변수 설정과 별개입니다.

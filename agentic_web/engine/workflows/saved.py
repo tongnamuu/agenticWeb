@@ -7,6 +7,7 @@ from threading import Lock
 from uuid import uuid4
 from agentic_web.config import WORKFLOWS_STORE_DIR
 from agentic_web.engine.skills.registry import URLMatcher, atomic_json
+from agentic_web.engine.browser.auth import requires_login
 from agentic_web.engine.storage import (
     FIRESTORE_WORKFLOWS_COLLECTION,
     ScopedFirestoreCollection,
@@ -125,7 +126,8 @@ class SavedWorkflows:
         self._firestore.set_document(identifier, workflow)
         return workflow
 
-    def run(self, identifier, run_id=None):
+    def run(self, identifier, run_id=None, progress=None, on_update=None):
+        notify = progress or (lambda message: None)
         if not self.lock.acquire(blocking=False):
             raise ValueError('다른 워크플로우가 실행 중입니다.')
         try:
@@ -143,8 +145,14 @@ class SavedWorkflows:
                        'next_step': 0, 'results': [], 'message': ''}
                 self.runs[run['run_id']] = run
             run['status'] = 'RUNNING'
+            def report(phase, message):
+                run.update(phase=phase, message=message)
+                notify(message)
+                if on_update:
+                    on_update(copy.deepcopy({key: value for key, value in run.items() if key != 'pending_output'}))
             while run['next_step'] < len(run['workflow']['steps']):
                 step = run['workflow']['steps'][run['next_step']]
+                report('NAVIGATING', f"{run['next_step'] + 1}/{len(run['workflow']['steps'])}단계 · {step['tool_name']} 페이지 확인 중")
                 tool = self.tool(step['url'], step['tool_name'])
                 if fingerprint(tool) != step['tool_fingerprint']:
                     raise ValueError('스킬이 변경되어 실행을 중단했습니다. 다시 저장하세요.')
@@ -153,24 +161,35 @@ class SavedWorkflows:
                 if not URLMatcher.is_exact_url_match(self.browser.current_url, step['url']):
                     run.update(status='NEEDS_USER_INPUT', message='페이지가 이동되었습니다. 브라우저에서 로그인 후 재개하세요.')
                     return run
+                snapshot = self.browser.inspect_page()['snapshot']
+                if requires_login(snapshot):
+                    run.update(status='NEEDS_USER_INPUT', message='실행기 브라우저에서 로그인하면 현재 단계부터 재개합니다.')
+                    return run
+                output = run.pop('pending_output', None)
                 for attempt in (1, 2):
-                    output = self.browser.execute_tool(tool, step['arguments'])
+                    if output is None or not output['action_result'].get('success'):
+                        report('EXECUTING', f"{run['next_step'] + 1}단계 · {tool['name']} 브라우저 실행 중 ({attempt}차)")
+                        output = self.browser.execute_tool(tool, step['arguments'])
                     record = {'tool_name': tool['name'], 'args': step['arguments'], 'operations': tool.get('steps', []),
                               'action_result': output['action_result'], 'verification': output['verification']}
+                    report('VERIFYING', f"{run['next_step'] + 1}단계 · {tool['name']} 저장 결과 검증 중 ({attempt}차)")
                     verdict = self.verifier.verify_execution(
                         user_prompt=f"{tool['description']} 입력값: {json.dumps(step['arguments'], ensure_ascii=False)}",
                         before_snapshot=output['before_snapshot'], after_snapshot=output['after_snapshot'], steps=[record], browser_session=self.browser)
                     run['results'].append({'step': run['next_step'] + 1, 'url': step['url'],
                                            'tool_name': tool['name'], 'attempt': attempt, 'verification': verdict})
+                    report('VERIFIED', f"{run['next_step'] + 1}단계 · 검증 결과: {'성공' if verdict.get('success') else '미확인'}")
                     if verdict.get('success'):
                         self.registry.increment_usage(step['url'])
                         break
                     if (verdict.get('status') == 'NEEDS_USER_INPUT' or
                         output['action_result'].get('failure_code') in ('LOGIN_REQUIRED', 'PERMISSION_DENIED')):
+                        if output['action_result'].get('success'):
+                            run['pending_output'] = output
                         run.update(status='NEEDS_USER_INPUT', message='브라우저에서 로그인 또는 필요한 입력을 완료한 후 재개하세요.')
                         return run
                     # A successful mutation with uncertain verification must not be blindly repeated.
-                    if output['action_result'].get('success'):
+                    if output['action_result'].get('success') and attempt == 2:
                         run.update(status='FAILED', message='변경 결과를 확인하지 못해 중복 실행을 중단했습니다.')
                         return run
                 else:
@@ -179,5 +198,9 @@ class SavedWorkflows:
                 run['next_step'] += 1
             run.update(status='SUCCESS', message='모든 단계를 순서대로 실행하고 검증했습니다.')
             return run
+        except Exception:
+            if 'run' in locals():
+                run.update(status='FAILED', message='실행 중 오류가 발생했습니다. 사이트와 스킬 상태를 확인하세요.')
+            raise
         finally:
             self.lock.release()

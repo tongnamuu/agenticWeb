@@ -19,7 +19,8 @@ class WebPackageTests(unittest.TestCase):
             self.assertNotIn(b'createWorkflowFromGoal',page.data)
             self.assertIn(b'data-skill-execute',page.data)
             for path in ['/workflows','/api/workflows','/static/workflows.js']:
-                self.assertEqual(client.get(path).status_code,404)
+                with client.get(path) as response:
+                    self.assertEqual(response.status_code,200)
             self.assertEqual(client.get('/api/skills').status_code,200)
             self.assertEqual(client.get('/demo-blog').status_code, 404)
             self.assertEqual(client.get('/demo-protected').status_code, 404)

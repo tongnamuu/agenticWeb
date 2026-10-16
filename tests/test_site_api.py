@@ -15,7 +15,7 @@ class SiteApiTests(unittest.TestCase):
                     session['user']={'id':'alice','name':'Alice','email':'alice@example.com'}
                     session['csrf_token']='csrf'
                 self.assertEqual(client.get('/api/skills').json['skills'],[])
-                self.assertEqual(client.get('/api/workflows').status_code,404)
+                self.assertEqual(client.get('/api/workflows').json['workflows'], [])
                 services=pool.for_user('alice')
                 def analyze(**kwargs):
                     kwargs['progress']('분석 중')
@@ -26,7 +26,7 @@ class SiteApiTests(unittest.TestCase):
                 job_id=response.json['job']['id']
                 app.extensions['analysis_jobs'].executor.shutdown(wait=True)
                 self.assertEqual(client.get('/api/analysis-jobs/'+job_id).json['job']['status'],'SUCCESS')
-                self.assertEqual(client.get('/api/workflows').status_code,404)
+                self.assertEqual(client.get('/api/workflows').json['workflows'], [])
                 with client.session_transaction() as session:
                     session['user']={'id':'bob','name':'Bob','email':'bob@example.com'}
                 self.assertEqual(client.get('/api/analysis-jobs/'+job_id).status_code,404)

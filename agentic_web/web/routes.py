@@ -290,3 +290,42 @@ def api_delete_skill():
 def api_state():
     dom_state = browser_session.inspect_page()
     return jsonify({"ok": True, "state": dom_state})
+
+
+@routes.route('/workflows')
+def workflows_page():
+    if not g.user:
+        return redirect(url_for('auth.login'))
+    return render_template('workflows.html', user=g.user)
+
+
+@routes.route('/api/workflows', methods=['GET', 'POST'])
+def api_workflows():
+    if request.method == 'GET':
+        return jsonify(ok=True, workflows=g.services.workflows.list())
+    try:
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            raise ValueError('워크플로우 정보를 입력하세요.')
+        return jsonify(ok=True, workflow=g.services.workflows.save(data))
+    except (ValueError, TypeError, AttributeError) as exc:
+        return jsonify(ok=False, error=str(exc)), 400
+
+
+@routes.route('/api/workflows/<identifier>/run', methods=['POST'])
+def api_workflow_run(identifier):
+    try:
+        data = request.get_json(silent=True) or {}
+        job = current_app.extensions['workflow_jobs'].start(
+            g.user['id'], g.services, identifier, data.get('run_id'))
+        return jsonify(ok=True, job=job), 202
+    except ValueError as exc:
+        return jsonify(ok=False, error=str(exc)), 409
+
+
+@routes.route('/api/workflow-jobs/<job_id>')
+def api_workflow_status(job_id):
+    job = current_app.extensions['workflow_jobs'].get(g.user['id'], job_id)
+    if job is None:
+        return jsonify(ok=False, error='실행을 찾을 수 없습니다.'), 404
+    return jsonify(ok=True, job=job)

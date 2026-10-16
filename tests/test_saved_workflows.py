@@ -11,6 +11,7 @@ class Browser:
     current_url = ''
     def __init__(self): self.calls = []
     def navigate(self, url): self.current_url = url
+    def inspect_page(self): return {'snapshot': {'url': self.current_url}}
     def execute_tool(self, tool, arguments):
         self.calls.append((self.current_url, tool['name'], arguments))
         return {'action_result': {'success': True}, 'verification': {},
@@ -21,7 +22,7 @@ class Verifier:
     def __init__(self, fail_at=None): self.count, self.fail_at = 0, fail_at
     def verify_execution(self, **kwargs):
         self.count += 1
-        return {'success': self.count != self.fail_at, 'reason': 'verified'}
+        return {'success': self.fail_at is None or self.count < self.fail_at, 'reason': 'verified'}
 
 
 class SavedWorkflowTests(unittest.TestCase):
@@ -84,7 +85,7 @@ class SavedWorkflowTests(unittest.TestCase):
             self.assertEqual(result['status'], 'NEEDS_USER_INPUT')
             resumed = service.run(saved['id'], result['run_id'])
             self.assertEqual(resumed['status'], 'SUCCESS')
-            self.assertEqual([name for _, name, _ in browser.calls], ['add','write','write','complete'])
+            self.assertEqual([name for _, name, _ in browser.calls], ['add','write','complete'])
 
     def test_web_studio_tool_schema_and_required_inputs(self):
         with tempfile.TemporaryDirectory() as directory:

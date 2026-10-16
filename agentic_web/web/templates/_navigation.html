@@ -20,6 +20,7 @@
   <a id="site-tab" class="studio-tab" href="{{ url_for('studio.index') }}" {% if request.endpoint == 'studio.index' %}aria-current="page"{% endif %}>
     <span aria-hidden="true">◎</span> 사이트 분석 · 스킬
   </a>
+  <a id="workflow-tab" class="studio-tab" href="{{ url_for('studio.workflows_page') }}" {% if request.endpoint == 'studio.workflows_page' %}aria-current="page"{% endif %}>워크플로우</a>
   <span class="studio-tab-status" role="status" aria-live="polite">분석 → 스킬 선택 → 실행</span>
 </nav>
 <script>
