@@ -15,18 +15,18 @@ class SiteApiTests(unittest.TestCase):
                     session['user']={'id':'alice','name':'Alice','email':'alice@example.com'}
                     session['csrf_token']='csrf'
                 self.assertEqual(client.get('/api/skills').json['skills'],[])
-                self.assertEqual(client.get('/api/workflows').json['workflows'],[])
+                self.assertEqual(client.get('/api/workflows').status_code,404)
                 services=pool.for_user('alice')
                 def analyze(**kwargs):
                     kwargs['progress']('분석 중')
                     return {'skill_package':{'normalized_url':'http://blog.test/','tools':[]}}
-                services.orchestrator.analyze_and_register_url_skill=analyze
+                services.orchestrator.analyze_site=analyze
                 response=client.post('/api/analyze',json={'url':'http://blog.test/'},headers={'X-CSRF-Token':'csrf'})
                 self.assertEqual(response.status_code,202)
                 job_id=response.json['job']['id']
                 app.extensions['analysis_jobs'].executor.shutdown(wait=True)
                 self.assertEqual(client.get('/api/analysis-jobs/'+job_id).json['job']['status'],'SUCCESS')
-                self.assertEqual(client.get('/api/workflows').json['workflows'],[])
+                self.assertEqual(client.get('/api/workflows').status_code,404)
                 with client.session_transaction() as session:
                     session['user']={'id':'bob','name':'Bob','email':'bob@example.com'}
                 self.assertEqual(client.get('/api/analysis-jobs/'+job_id).status_code,404)
@@ -46,6 +46,8 @@ class SiteApiTests(unittest.TestCase):
             class FakeBrowser:
                 current_url=url
                 calls=0
+                def capture_screenshot(self):return ''
+                def inspect_page(self):return {'snapshot':{'url':url,'authState':{}}}
                 def execute_tool(self,tool,args):
                     self.calls+=1
                     return {'before_snapshot':{'url':url},'after_snapshot':{'url':url},
@@ -91,3 +93,29 @@ class SiteApiTests(unittest.TestCase):
                 with client.session_transaction() as session:
                     session['user']={'id':'bob'}
                 self.assertEqual(client.post('/api/rename-skill',json={'url':url,'name':'Bob'},headers={'X-CSRF-Token':'csrf'}).status_code,404)
+
+    def test_login_browser_opens_users_session_and_checks_oauth_return(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+        with tempfile.TemporaryDirectory() as directory:
+            app = create_app({'TESTING': True, 'SECRET_KEY': 'test'})
+            pool = UserServicePool(directory+'/skills', directory+'/workflows')
+            app.extensions['user_services'] = pool
+            browser = Mock()
+            pool.for_user('alice').browser = browser
+            with app.test_client() as client:
+                with client.session_transaction() as session:
+                    session['user'] = {'id': 'alice'}
+                    session['csrf_token'] = 'csrf'
+                headers = {'X-CSRF-Token': 'csrf'}
+                self.assertEqual(client.post('/api/login-browser', headers=headers).status_code, 200)
+                browser.show_for_login.assert_called_once_with()
+                for url, auth, expected in [
+                    ('https://github.com/login', True, False),
+                    ('https://blog.test/login', False, False),
+                    ('https://blog.test/', True, True),
+                ]:
+                    browser.inspect_page.return_value = {'snapshot': {'url': url, 'authState': {'is_authenticated': auth}}}
+                    response = client.post('/api/login-status', json={'url':'https://blog.test/'}, headers=headers)
+                    self.assertEqual(response.json['authenticated'], expected)
+                browser.navigate.assert_not_called()

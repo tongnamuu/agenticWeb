@@ -37,3 +37,25 @@ class AnalysisJobTests(unittest.TestCase):
         self.assertEqual(result['status'],'FAILED')
         self.assertIn('Chrome 실행 실패',result['message'])
         self.assertTrue(services.lock.acquire(blocking=False));services.lock.release()
+
+    def test_login_pause_resume_owner_and_lock(self):
+        class Analyzer:
+            calls=0
+            def analyze_and_register_url_skill(self, **kwargs): pass
+            def analyze_site(self, **kwargs):
+                self.calls+=1
+                if self.calls==1: return {'status':'NEEDS_USER_INPUT','message':'로그인 필요','login_url':'https://blog.test/login'}
+                return {'skill_package':{'normalized_url':'https://blog.test/','tools':[]}}
+        services=SimpleNamespace(lock=Lock(),browser=object(),orchestrator=Analyzer())
+        jobs=AnalysisJobs()
+        try:
+            job=jobs.start('alice',services,'https://blog.test/')
+            # Wait for the single submitted job without shutting down the executor needed for resume.
+            jobs.executor.submit(lambda:None).result(timeout=2)
+            self.assertEqual(jobs.get('alice',job['id'])['status'],'NEEDS_USER_INPUT')
+            with self.assertRaises(KeyError):jobs.resume('bob',job['id'],services)
+            jobs.resume('alice',job['id'],services,{'browser_login_completed':True})
+            jobs.executor.shutdown(wait=True)
+            self.assertEqual(jobs.get('alice',job['id'])['status'],'SUCCESS')
+            self.assertTrue(services.lock.acquire(blocking=False));services.lock.release()
+        finally: jobs.executor.shutdown(wait=True)

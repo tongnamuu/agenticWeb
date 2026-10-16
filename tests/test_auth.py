@@ -68,8 +68,8 @@ class GoogleAuthTests(unittest.TestCase):
             self.assertNotIn('id_token',session);self.assertNotIn('access_token',session)
             csrf=session['csrf_token']
         self.assertEqual(self.client.get('/auth/me').json['user']['email'],'test@example.com')
-        self.assertEqual(self.client.post('/api/workflows',json={}).status_code,403)
-        self.assertEqual(self.client.post('/api/workflows',json={},headers={'X-CSRF-Token':csrf}).status_code,400)
+        self.assertEqual(self.client.post('/api/analyze',json={}).status_code,403)
+        self.assertEqual(self.client.post('/api/analyze',json={},headers={'X-CSRF-Token':csrf}).status_code,400)
         self.assertEqual(self.client.get('/auth/logout').status_code,405)
         self.assertEqual(self.client.post('/auth/logout',data={'csrf_token':csrf}).status_code,302)
         self.assertEqual(self.client.get('/auth/me').status_code,401)

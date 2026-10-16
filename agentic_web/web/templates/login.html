@@ -11,7 +11,7 @@
 </head>
 <body><main>
   <div class="brand">WEB AGENT</div><h1>로그인</h1>
-  <p>사이트의 스킬을 관리하고<br>워크플로우를 실행하세요.</p>
+  <p>사이트별 스킬을 분석하고<br>실행하세요.</p>
   {% if error %}<p class="notice error" role="alert">{{ error }}</p>{% endif %}
   <form method="post" action="{{ url_for('auth.google_login') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

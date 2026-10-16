@@ -1,0 +1,34 @@
+<style>
+  .studio-shell {--panel-bg:#0f172a;--panel-border:#334155;width:calc(100% - 48px);max-width:1750px;margin:24px auto;flex:1;}
+  .studio-tabs {display:flex;align-items:stretch;gap:4px;margin:0;padding:0 0 0 0;position:relative;}
+  .studio-tab {display:flex;align-items:center;gap:8px;position:relative;padding:14px 24px;border:1px solid transparent;border-bottom:0;border-radius:10px 10px 0 0;color:#94a3b8;text-decoration:none;font-size:14px;font-weight:600;background:#111827;transition:color .15s,background .15s;}
+  .studio-tab:hover {background:#1e293b;color:#f8fafc;}
+  .studio-tab[aria-current="page"] {background:var(--panel-bg);color:#f8fafc;border-color:var(--panel-border);z-index:1;}
+  .studio-tab[aria-current="page"]::before {content:'';position:absolute;left:0;right:0;bottom:-1px;height:2px;background:var(--panel-bg);}
+  .studio-content {background:var(--panel-bg);border:1px solid var(--panel-border);border-radius:0 12px 12px 12px;min-height:calc(100vh - 200px);overflow:hidden;}
+  .studio-content > .wf-panel {margin:0;padding:24px;border:0;border-radius:0;background:transparent;}
+  .studio-content #analysis-status:empty {display:none;}
+  .studio-tab[aria-busy="true"] {background:#1e293b;color:#c7d2fe;}
+  .studio-tab[aria-busy="true"]::after {content:' ';width:12px;height:12px;border:2px solid #64748b;border-top-color:#c7d2fe;border-radius:50%;animation:studio-spin .7s linear infinite;}
+  @keyframes studio-spin {to {transform:rotate(360deg);}}
+  @media(prefers-reduced-motion:reduce){.studio-tab[aria-busy="true"]::after{animation:none;}}
+  .studio-tab:focus-visible {outline:2px solid #a5b4fc;outline-offset:3px;}
+  .studio-tab-status {align-self:center;margin-left:auto;padding:0 12px;font-size:12px;color:#94a3b8;}
+  @media(max-width:600px){.studio-shell{width:calc(100% - 24px);margin:16px auto;}.studio-tab{padding:12px;}.studio-tab-status{display:none;}.studio-content > .wf-panel{padding:16px;}}
+</style>
+<nav class="studio-tabs" aria-label="주 메뉴">
+  <a id="site-tab" class="studio-tab" href="{{ url_for('studio.index') }}" {% if request.endpoint == 'studio.index' %}aria-current="page"{% endif %}>
+    <span aria-hidden="true">◎</span> 사이트 분석 · 스킬
+  </a>
+  <span class="studio-tab-status" role="status" aria-live="polite">분석 → 스킬 선택 → 실행</span>
+</nav>
+<script>
+  document.querySelectorAll('.studio-tab').forEach(link => {
+    link.addEventListener('click', event => {
+      if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+      if (link.getAttribute('aria-current') === 'page') {event.preventDefault(); return;}
+      document.querySelector('.studio-tab-status').textContent = link.textContent.trim() + ' 화면으로 이동 중…';
+      link.setAttribute('aria-busy', 'true');
+    });
+  });
+</script>

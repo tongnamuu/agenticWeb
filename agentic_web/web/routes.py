@@ -17,9 +17,9 @@ from werkzeug.local import LocalProxy
 
 browser_session = LocalProxy(lambda: g.services.browser)
 orchestrator = LocalProxy(lambda: g.services.orchestrator)
-saved_workflows = LocalProxy(lambda: g.services.workflows)
 from agentic_web.config import MAX_ROOT_RETRY_COUNT, MODEL_ROLES
 from agentic_web.engine.skills.registry import URLMatcher
+from agentic_web.engine.browser.auth import requires_login
 
 routes = Blueprint('studio', __name__)
 
@@ -29,8 +29,8 @@ def serialize_browser_requests():
     if not g.user:
         return
     g.services = current_app.extensions['user_services'].for_user(g.user['id'])
-    browser_paths = { '/api/execute', '/api/call-tool', '/api/state', '/api/delete-skill', '/api/rename-skill'}
-    if request.path in browser_paths or (request.path.startswith('/api/workflows/') and request.path.endswith('/run')):
+    browser_paths = { '/api/execute', '/api/call-tool', '/api/state', '/api/delete-skill', '/api/rename-skill', '/api/site-login', '/api/login-browser', '/api/login-status'}
+    if request.path in browser_paths:
         if not g.services.lock.acquire(blocking=False):
             return jsonify(ok=False, error='다른 브라우저 작업이 실행 중입니다. 완료 후 다시 시도하세요.'), 409
         g.browser_request_locked = True
@@ -43,33 +43,6 @@ def release_browser_request_lock(error):
         g.services.lock.release()
 
 
-
-@routes.route('/api/workflows', methods=['GET', 'POST'])
-def api_workflows():
-    try:
-        if request.method == 'GET':
-            return jsonify(ok=True, workflows=saved_workflows.list())
-        return jsonify(ok=True, workflow=saved_workflows.save(request.get_json() or {}))
-    except (ValueError, TypeError, KeyError) as exc:
-        return jsonify(ok=False, error=str(exc)), 400
-
-
-@routes.route('/api/workflows/<identifier>/run', methods=['POST'])
-def api_run_workflow(identifier):
-    try:
-        data = request.get_json(silent=True) or {}
-        result = saved_workflows.run(identifier, data.get('run_id'))
-        return jsonify(ok=result['status'] == 'SUCCESS', **result)
-    except (ValueError, TypeError, KeyError) as exc:
-        return jsonify(ok=False, error=str(exc)), 400
-    except Exception as exc:
-        return jsonify(ok=False, status='FAILED', error=str(exc)), 500
-
-
-
-# =====================================================================
-# Built-in Test Web Pages (for Multi-URL Isolation & HITL Login Testing)
-# =====================================================================
 
 @routes.route("/")
 def index():
@@ -99,6 +72,7 @@ def api_list_skills():
             "ok": True,
             "total": len(skills),
             "skills": skills,
+            "sites": orchestrator.registry.list_sites(),
             "query_url": url_query,
             "normalized_query_url": norm_query,
             "matched_skill_for_query_url": matched_skill,
@@ -131,11 +105,38 @@ def api_analysis_status(job_id):
     return jsonify(ok=True,job=job)
 
 
-@routes.route('/workflows')
-def workflows_page():
-    if not g.user:
-        return redirect(url_for('auth.login'))
-    return render_template('workflows.html',user=g.user)
+@routes.route('/api/analysis-jobs/<job_id>/resume', methods=['POST'])
+def api_resume_analysis(job_id):
+    try:
+        job = current_app.extensions['analysis_jobs'].resume(
+            g.user['id'], job_id, g.services, request.get_json(silent=True) or {})
+        return jsonify(ok=True, job=job), 202
+    except KeyError:
+        return jsonify(ok=False, error='분석 요청을 찾을 수 없습니다.'), 404
+    except ValueError as exc:
+        return jsonify(ok=False, error=str(exc)), 409
+
+
+@routes.route('/api/login-browser', methods=['POST'])
+def api_login_browser():
+    try:
+        browser_session.show_for_login()
+        return jsonify(ok=True)
+    except RuntimeError as exc:
+        return jsonify(ok=False, error=str(exc)), 409
+
+
+@routes.route('/api/login-status', methods=['POST'])
+def api_login_status():
+    from urllib.parse import urlparse
+    data = request.get_json(silent=True) or {}
+    target = URLMatcher.normalize_url(data.get('url', ''))
+    snapshot = browser_session.inspect_page()['snapshot']
+    actual = snapshot.get('url', '')
+    expected, observed = urlparse(target), urlparse(actual)
+    same_origin = bool(target) and (expected.scheme, expected.netloc) == (observed.scheme, observed.netloc)
+    authenticated = same_origin and not requires_login(snapshot) and bool(snapshot.get('authState', {}).get('is_authenticated'))
+    return jsonify(ok=True, authenticated=authenticated, url=actual)
 
 
 @routes.route("/api/execute", methods=["POST"])
@@ -200,20 +201,26 @@ def api_call_tool():
             404,
         )
 
-    # Ensure browser is on the expected URL
-    if URLMatcher.normalize_url(browser_session.current_url) != skill_pkg["normalized_url"]:
-        browser_session.navigate(url)
+    from agentic_web.engine.workflows.saved import validate_arguments
+    try:
+        validate_arguments(tool_def, arguments)
+    except ValueError as exc:
+        return jsonify(ok=False, status='FAILED', error=str(exc)), 400
 
-    required = tool_def.get('parameters', {}).get('required', [])
-    missing = [key for key in required if not isinstance(arguments, dict) or not str(arguments.get(key, '')).strip()]
-    if missing:
-        return jsonify(ok=False, error='필수 입력값이 없습니다: ' + ', '.join(missing)), 400
+    if URLMatcher.normalize_url(browser_session.current_url) != skill_pkg['normalized_url']:
+        browser_session.navigate(url)
+    snapshot = browser_session.inspect_page()['snapshot']
+    if requires_login(snapshot):
+        verification={'success':False, 'status':'NEEDS_USER_INPUT', 'failure_code':'LOGIN_REQUIRED',
+                      'reason':'이 스킬을 실행하려면 사이트 로그인이 필요합니다.'}
+        return jsonify(ok=False, status='NEEDS_USER_INPUT', tool_name=tool_name, arguments=arguments,
+                       verification=verification, attempts=[], retry_count=0)
 
     attempts = []
     exec_out = None
     for attempt in range(2):
         # A technical verification failure retries observation, never blindly repeats a mutation.
-        if exec_out is None or verification.get('failure_code') == 'GOAL_NOT_MET':
+        if exec_out is None or not exec_out['action_result'].get('success') and verification.get('failure_code') == 'GOAL_NOT_MET':
             exec_out = browser_session.execute_tool(tool_def, arguments)
         step_record = {
             'tool_name': tool_name, 'display_name': tool_def.get('display_name', tool_name),
@@ -229,11 +236,28 @@ def api_call_tool():
                          'steps': [step_record], 'verification': verification})
         if verification.get('success') or verification.get('status') == 'NEEDS_USER_INPUT':
             break
-        if not verification.get('failure_code', '').startswith('VERIFICATION_') and verification.get('failure_code') != 'GOAL_NOT_MET':
+        if not (verification.get('failure_code') or '').startswith('VERIFICATION_') and verification.get('failure_code') != 'GOAL_NOT_MET':
             break
-    return jsonify(ok=verification.get('success', False), tool_name=tool_name,
+    return jsonify(ok=verification.get('success', False), status=verification.get('status','FAILED'), tool_name=tool_name,
                    arguments=arguments, execution=exec_out, verification=verification,
-                   attempts=attempts, retry_count=len(attempts)-1)
+                   attempts=attempts, retry_count=len(attempts)-1, observation={
+                       'url':browser_session.current_url, 'screenshot':browser_session.capture_screenshot()})
+
+
+@routes.route('/api/site-login', methods=['POST'])
+def api_site_login():
+    data = request.get_json(silent=True) or {}
+    url = data.get('url', '')
+    if not orchestrator.registry.has_skill_for_url(url):
+        return jsonify(ok=False,error='등록된 사이트가 아닙니다.'),400
+    browser_session.navigate(url)
+    if data.get('username') and data.get('password'):
+        browser_session.perform_direct_login(username=data['username'],password=data['password'],
+            snapshot=browser_session.inspect_page()['snapshot'])
+    snapshot = browser_session.inspect_page()['snapshot']
+    if requires_login(snapshot):
+        return jsonify(ok=False,error='로그인을 완료하지 못했습니다. 입력 정보를 확인하세요.'),400
+    return jsonify(ok=True)
 
 
 @routes.route('/api/rename-skill', methods=['POST'])

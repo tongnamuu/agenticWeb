@@ -36,6 +36,10 @@ def create_app(test_config=None):
     from .analysis_jobs import AnalysisJobs
     app.extensions['user_services'] = UserServicePool()
     app.extensions['analysis_jobs'] = AnalysisJobs()
+    @app.context_processor
+    def model_context():
+        return {'model_roles': config.MODEL_ROLES}
+
     from .routes import routes
     app.register_blueprint(routes)
     return app

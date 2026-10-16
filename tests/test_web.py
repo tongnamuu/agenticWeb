@@ -16,13 +16,11 @@ class WebPackageTests(unittest.TestCase):
             self.assertEqual(page.status_code, 200)
             self.assertNotIn(b'workflow-catalog', page.data)
             self.assertIn(b'analysis-status', page.data)
-            workflows = client.get('/workflows')
-            self.assertEqual(workflows.status_code, 200)
-            self.assertIn(b'workflow-catalog', workflows.data)
-            self.assertNotIn(b'URL \xec\x8a\xa4\xed\x82\xac \xed\x8c\x90\xeb\xb3\x84/\xec\xb6\x94\xec\xb6\x9c', workflows.data)
-            for path in ['/static/workflows.js', '/api/skills', '/api/workflows']:
-                with client.get(path) as response:
-                    self.assertEqual(response.status_code, 200, path)
+            self.assertNotIn(b'createWorkflowFromGoal',page.data)
+            self.assertIn(b'data-skill-execute',page.data)
+            for path in ['/workflows','/api/workflows','/static/workflows.js']:
+                self.assertEqual(client.get(path).status_code,404)
+            self.assertEqual(client.get('/api/skills').status_code,200)
             self.assertEqual(client.get('/demo-blog').status_code, 404)
             self.assertEqual(client.get('/demo-protected').status_code, 404)
             self.assertEqual(client.post('/api/analyze', json={}, headers={'X-CSRF-Token':'test-csrf'}).status_code, 400)

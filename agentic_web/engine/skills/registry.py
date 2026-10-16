@@ -16,6 +16,18 @@ from agentic_web.engine.storage import (
 )
 
 
+def is_user_tool(tool):
+    name = tool.get('name', '').lower()
+    if name.startswith(('open_page_', 'navigate_to_', 'login', 'sign_in', 'signup', 'register_account')):
+        return False
+    schema = tool.get('parameters') or {}
+    params = schema.get('properties', {}) if isinstance(schema, dict) else {p['name']:p for p in schema}
+    if any('password' in key.lower() for key in params):
+        return False
+    operations = [step.get('op', step.get('action')) for step in tool.get('steps', [])]
+    return not (operations and 'navigate' in operations and all(op in ('navigate','wait','read','read_state') for op in operations))
+
+
 def validate_tool(tool):
     # The web studio uses JSON Schema parameters and CDP op steps;
     # the Playwright worker uses parameter lists and action steps.
@@ -107,34 +119,68 @@ class SkillRegistry:
       active target URL is activated for tool calling.
     """
 
-    def __init__(self, store_dir: str = SKILLS_STORE_DIR, index_path: Optional[str] = None):
+    def __init__(
+        self,
+        store_dir: str = SKILLS_STORE_DIR,
+        index_path: Optional[str] = None,
+        use_firestore: Optional[bool] = None,
+    ):
         self.store_dir = store_dir
         self.index_path = index_path or os.path.join(store_dir, "registry_index.json")
         os.makedirs(self.store_dir, exist_ok=True)
+        scope = resolve_store_scope(self.store_dir, SKILLS_STORE_DIR)
+        self._firestore = ScopedFirestoreCollection(
+            FIRESTORE_SKILLS_COLLECTION,
+            scope=scope,
+            use_firestore=use_firestore,
+        )
         # Map: normalized_url -> skill_package dict
         self._skills_by_url: Dict[str, Dict[str, Any]] = {}
         self._load_all_from_disk()
 
+    def _ingest_skill_data(self, data: Dict[str, Any]) -> Optional[str]:
+        norm_url = URLMatcher.normalize_url(data.get("target_url", ""))
+        if norm_url and isinstance(data.get("tools"), list):
+            data["tools"] = [tool for tool in data["tools"] if is_user_tool(tool)]
+            for tool in data["tools"]:
+                validate_tool(tool)
+                tool["bound_normalized_url"] = norm_url
+            data["normalized_url"] = norm_url
+            self._skills_by_url[norm_url] = data
+            return norm_url
+        return None
+
     def _load_all_from_disk(self) -> None:
         self._skills_by_url.clear()
-        if not os.path.exists(self.store_dir):
-            return
-        for fname in sorted(os.listdir(self.store_dir)):
-            if not fname.endswith(".json") or fname == "registry_index.json":
-                continue
-            fpath = os.path.join(self.store_dir, fname)
-            try:
-                with open(fpath, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                norm_url = URLMatcher.normalize_url(data.get("target_url", ""))
-                if norm_url and isinstance(data.get("tools"), list):
-                    for tool in data["tools"]:
-                        validate_tool(tool)
-                        tool["bound_normalized_url"] = norm_url
-                    data["normalized_url"] = norm_url
-                    self._skills_by_url[norm_url] = data
-            except Exception as e:
-                print(f"[SkillRegistry] Warning: Failed to load {fpath}: {e}")
+        if os.path.exists(self.store_dir):
+            for fname in sorted(os.listdir(self.store_dir)):
+                if not fname.endswith(".json") or fname == "registry_index.json":
+                    continue
+                fpath = os.path.join(self.store_dir, fname)
+                try:
+                    with open(fpath, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    self._ingest_skill_data(data)
+                except Exception as e:
+                    print(f"[SkillRegistry] Warning: Failed to load {fpath}: {e}")
+
+        if self._firestore.enabled:
+            remote_ids = set()
+            for remote_pkg in self._firestore.list_documents():
+                try:
+                    norm_url = self._ingest_skill_data(remote_pkg)
+                    skill_id = remote_pkg.get("skill_id") or (URLMatcher.url_to_skill_id(norm_url) if norm_url else "")
+                    if norm_url and skill_id:
+                        remote_ids.add(skill_id)
+                        atomic_json(os.path.join(self.store_dir, f"{skill_id}.json"), remote_pkg)
+                except Exception as e:
+                    print(f"[SkillRegistry] Warning: Failed to ingest Firestore skill: {e}")
+
+            for pkg in self._skills_by_url.values():
+                sid = pkg.get("skill_id")
+                if sid and sid not in remote_ids:
+                    self._firestore.set_document(sid, pkg)
+
         self._save_index()
 
     def _save_index(self) -> None:
@@ -191,6 +237,7 @@ class SkillRegistry:
         Dynamically registers (or updates/repairs) a Skill Package for `target_url`
         and persists it to `skills_store/<skill_id>.json`.
         """
+        tools = [tool for tool in tools if is_user_tool(tool)]
         norm_url = URLMatcher.normalize_url(target_url)
         if not norm_url or not tools:
             raise ValueError("A skill needs a valid URL and tools")
@@ -202,14 +249,13 @@ class SkillRegistry:
         existing = self._skills_by_url.get(norm_url)
         now_iso = datetime.now().isoformat()
 
-        # If repairing a skill or re-synthesizing after unlocking a login wall, replace stale tools
-        # with the freshly synthesized tools from the live DOM; otherwise merge additively.
-        if existing and not is_repair:
+        # Renewal and repair update matching names while retaining capabilities absent from this page state.
+        if existing:
             new_names = {t["name"] for t in tools}
             merged = {
                 t["name"]: t
                 for t in existing["tools"]
-                if t["name"] != "login_site" or "login_site" in new_names
+                if is_user_tool(t)
             }
             merged.update({t["name"]: t for t in tools})
             tools = list(merged.values())
@@ -249,6 +295,7 @@ class SkillRegistry:
         atomic_json(skill_file, skill_package)
         self._skills_by_url[norm_url] = skill_package
         self._save_index()
+        self._firestore.set_document(skill_id, skill_package)
         return skill_package
 
     def rename_skill(self, target_url: str, name: str) -> Dict[str, Any]:
@@ -262,6 +309,7 @@ class SkillRegistry:
         atomic_json(os.path.join(self.store_dir, f"{pkg['skill_id']}.json"), updated)
         self._skills_by_url[pkg['normalized_url']] = updated
         self._save_index()
+        self._firestore.set_document(pkg['skill_id'], updated)
         return updated
 
     def increment_usage(self, target_url: str) -> None:
@@ -277,6 +325,7 @@ class SkillRegistry:
             self._save_index()
         except Exception:
             pass
+        self._firestore.set_document(pkg["skill_id"], pkg)
 
     def delete_skill_by_url(self, target_url: str) -> bool:
         norm_url = URLMatcher.normalize_url(target_url)
@@ -290,11 +339,29 @@ class SkillRegistry:
             except Exception:
                 pass
         self._save_index()
+        self._firestore.delete_document(pkg["skill_id"])
         return True
 
     def list_all_skills(self) -> List[Dict[str, Any]]:
         """Returns all registered URL Skills across the agent system."""
         return list(self._skills_by_url.values())
+
+    def list_sites(self):
+        groups = {}
+        for package in self.list_all_skills():
+            parsed = urlparse(package['normalized_url'])
+            if re.search(r'(?:^|/)(?:login|signin|sign-in)(?:/|$)', parsed.path, re.I):
+                continue
+            origin = f'{parsed.scheme}://{parsed.netloc}'
+            groups.setdefault(origin, []).append(package)
+        sites = []
+        for origin, packages in groups.items():
+            packages.sort(key=lambda pkg: (len(urlparse(pkg['normalized_url']).path), pkg['normalized_url']))
+            main = packages[0]
+            name = next((pkg['custom_name'] for pkg in packages if pkg.get('custom_name')), main['skill_name'])
+            sites.append({'origin':origin,'name':name,'representative_url':main['normalized_url'],
+                          'packages':packages})
+        return sites
 
     def get_tools_strictly_for_url(self, target_url: str) -> Tuple[List[Dict[str, Any]], Optional[Dict[str, Any]], Dict[str, Any]]:
         """

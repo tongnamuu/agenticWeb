@@ -35,16 +35,19 @@ def get_api_key(override_key: str = "") -> str:
 # - skill_executor: Low-latency Function Calling & HITL input detection
 MODEL_ROLES: Dict[str, Dict[str, object]] = {
     "root_verifier": {
-        "primary": os.environ.get("GEMINI_ROOT_MODEL", "gemini-2.5-pro"),
-        "fallbacks": ["gemini-2.5-flash", "gemini-2.0-flash"],
+        "primary": os.environ.get("GEMINI_ROOT_MODEL", "gemini-4-argon"),
+        "fallbacks": [],
+        "thinking_level": "high",
     },
     "skill_synthesizer": {
-        "primary": os.environ.get("GEMINI_SYNTHESIZER_MODEL", "gemini-2.5-pro"),
-        "fallbacks": ["gemini-2.5-flash", "gemini-2.0-flash"],
+        "primary": os.environ.get("GEMINI_SYNTHESIZER_MODEL", "gemini-4-argon"),
+        "fallbacks": [],
+        "thinking_level": "high",
     },
     "skill_executor": {
-        "primary": os.environ.get("GEMINI_EXECUTOR_MODEL", "gemini-2.5-flash"),
-        "fallbacks": ["gemini-2.0-flash", "gemini-2.5-pro"],
+        "primary": os.environ.get("GEMINI_EXECUTOR_MODEL", "gemini-4-argon"),
+        "fallbacks": [],
+        "thinking_level": "high",
     },
 }
 
@@ -63,3 +66,5 @@ def get_model_candidates(role: str) -> List[str]:
         if m not in ordered:
             ordered.append(m)
     return ordered
+
+GEMINI_REQUEST_TIMEOUT = 900

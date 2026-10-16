@@ -6,8 +6,9 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 
-from agentic_web.config import MAX_ROOT_RETRY_COUNT, MODEL_ROLES, get_api_key, get_model_candidates
-from agentic_web.engine.skills.registry import SkillRegistry, URLMatcher
+from agentic_web.config import MAX_ROOT_RETRY_COUNT, MODEL_ROLES, GEMINI_REQUEST_TIMEOUT, get_api_key, get_model_candidates
+from agentic_web.engine.skills.registry import SkillRegistry, URLMatcher, is_user_tool
+from agentic_web.engine.browser.auth import requires_login
 from agentic_web.engine.agents.result_verifier import ResultVerificationAgent
 
 
@@ -42,26 +43,22 @@ class GeminiClient:
 
         candidates = get_model_candidates(role)
         last_err = None
-        deadline = time.monotonic() + 60
+        deadline = time.monotonic() + GEMINI_REQUEST_TIMEOUT
 
         for model in candidates:
-            endpoints = (
-                [
-                    f"https://aiplatform.googleapis.com/v1/publishers/google/models/{model}:generateContent?key={self.api_key}",
-                    f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={self.api_key}",
-                ]
-                if self.api_key.startswith("AQ.")
-                else [
-                    f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={self.api_key}",
-                    f"https://aiplatform.googleapis.com/v1/publishers/google/models/{model}:generateContent?key={self.api_key}",
-                ]
-            )
+            endpoints = [
+                f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+                f"https://aiplatform.googleapis.com/v1/publishers/google/models/{model}:generateContent",
+            ]
             payload: Dict[str, Any] = {"contents": contents}
             if system_instruction:
                 payload["systemInstruction"] = {"parts": [{"text": system_instruction}]}
             if tools:
                 payload["tools"] = tools
-            gen_cfg: Dict[str, Any] = {"temperature": temperature}
+            gen_cfg: Dict[str, Any] = (
+                {'thinkingConfig': {'thinkingLevel': MODEL_ROLES.get(role, {}).get('thinking_level', 'high')},
+                 'maxOutputTokens': 65536}
+                if model.startswith('gemini-4') else {'temperature': temperature})
             if json_mode:
                 gen_cfg["responseMimeType"] = "application/json"
             payload["generationConfig"] = gen_cfg
@@ -73,17 +70,17 @@ class GeminiClient:
                     remaining = deadline - time.monotonic()
                     if remaining <= 0:
                         raise TimeoutError('Gemini 응답 대기 시간이 초과됐습니다.')
-                    resp = requests.post(url, json=payload, timeout=(5, min(25, remaining)))
+                    resp = requests.post(url, headers={"x-goog-api-key": self.api_key}, json=payload, timeout=(5, remaining))
                     if resp.status_code == 200:
                         data = resp.json()
                         data["_model_used"] = model
                         data["_role"] = role
                         return data
-                    last_err = f"{model} HTTP {resp.status_code}: {resp.text[:280]}"
+                    last_err = f"{model} HTTP {resp.status_code}"
                     if resp.status_code not in (401, 403):
                         break
                 except Exception as e:
-                    last_err = f"{model} error: {e}"
+                    last_err = f"{model} error: {type(e).__name__}"
 
         raise RuntimeError(f"Gemini call failed for role '{role}': {last_err}")
 
@@ -91,7 +88,7 @@ class GeminiClient:
 class SkillSynthesizerAgent:
     """
     [Agent 1] Page Analyzer & Per-URL Skill Synthesizer Agent
-    Model Role: `skill_synthesizer` (Primary: `gemini-2.5-pro`)
+    Model Role: `skill_synthesizer` (Primary: `gemini-4-argon`)
     Analyzes a website's DOM snapshot and synthesizes reusable per-URL Skill Tools.
     Also repairs/updates a URL's Skill during the Root Agent's 1x retry loop if Attempt 1 fails.
     """
@@ -103,6 +100,7 @@ class SkillSynthesizerAgent:
         self,
         snapshot: Dict[str, Any],
         failure_feedback: Optional[str] = None,
+        existing_tools: Optional[List[Dict[str, Any]]] = None,
     ) -> Tuple[List[Dict[str, Any]], str]:
         """
         Synthesizes reusable browser tools for the given page snapshot.
@@ -112,7 +110,7 @@ class SkillSynthesizerAgent:
 
         if self.client.has_key:
             try:
-                llm_tools, model_used = self._synthesize_with_gemini(snapshot, failure_feedback)
+                llm_tools, model_used = self._synthesize_with_gemini(snapshot, failure_feedback, existing_tools)
                 if llm_tools:
                     merged = self._merge_and_validate_tools(llm_tools, heuristic_tools)
                     return merged, f"Gemini ({model_used})"
@@ -125,6 +123,7 @@ class SkillSynthesizerAgent:
         self,
         snapshot: Dict[str, Any],
         failure_feedback: Optional[str] = None,
+        existing_tools: Optional[List[Dict[str, Any]]] = None,
     ) -> Tuple[List[Dict[str, Any]], str]:
         system_prompt = """당신은 특정 URL의 웹페이지 DOM 구조를 분석하여 이후에도 계속 재사용할 수 있는 'URL 전용 에이전트 스킬(Function Tools)'을 생성하는 Skill Synthesizer Agent입니다.
 
@@ -146,7 +145,9 @@ class SkillSynthesizerAgent:
 설계 규칙:
 - 여러 입력 필드를 채운 후 제출/클릭해야 하는 기능(예: 로그인, 게시글 작성, 할 일 추가)은 하나의 도구 안에 순서대로 `fill`/`select` 스텝과 마지막 `submit`/`click` 스텝을 묶으세요.
 - 로그인이 필요한 동작인지 여부를 `"requires_auth": true/false`로 명시하세요.
+- 단순 링크 이동, 로그인, 회원가입은 사용자 스킬이 아닙니다. navigate_to_*, open_page_*, login 도구를 생성하지 마세요. 작성·추가·완료 같은 실제 작업만 생성하세요.
 - 현재 페이지 상태를 조회하는 `get_page_state` 도구를 항상 포함하세요.
+- existingTools는 기존 등록 기능입니다. 같은 기능은 기존 name과 파라미터 이름을 유지해 갱신하고, 빠진 기능은 새 도구로 추가하세요. 현재 화면에 없다는 이유로 기존 기능을 삭제하지 마세요.
 - `dynamicHints`(스크립트 코드)에 동적으로 생성되는 목록 버튼(예: ✅, ❌, ◀, 삭제, 완료 등)이 있으면 `click_item_button` 도구를 반드시 생성하세요.
 
 응답 JSON 스키마(배열):
@@ -185,6 +186,7 @@ class SkillSynthesizerAgent:
             "lists": snapshot.get("lists", []),
             "headings": snapshot.get("headings", []),
             "dynamicHints": snapshot.get("dynamicHints", []),
+            "existingTools": existing_tools or [],
         }
 
         user_msg = (
@@ -216,7 +218,7 @@ class SkillSynthesizerAgent:
             parsed = parsed["tools"]
         if not isinstance(parsed, list):
             parsed = []
-        return parsed, res.get("_model_used", "gemini-2.5-pro")
+        return parsed, res.get("_model_used", "gemini-4-argon")
 
     @staticmethod
     def _merge_and_validate_tools(
@@ -241,7 +243,7 @@ class SkillSynthesizerAgent:
                 valid_tools.append(ht)
                 seen_names.add(ht["name"])
 
-        return valid_tools
+        return [tool for tool in valid_tools if is_user_tool(tool)]
 
     def _heuristic_dom_to_tools(self, snapshot: Dict[str, Any]) -> List[Dict[str, Any]]:
         tools: List[Dict[str, Any]] = []
@@ -263,21 +265,6 @@ class SkillSynthesizerAgent:
                 "verification": {"type": "read_only", "description": "페이지 상태 읽기 확인"},
             }
         )
-
-        # Navigation is a URL-bound capability, not completion of the user's goal.
-        origin=urlparse(snapshot.get('url',''))
-        for index, link in enumerate(snapshot.get('links',[])[:25]):
-            href=urljoin(snapshot.get('url',''),link.get('href',''))
-            parsed=urlparse(href)
-            if parsed.scheme not in ('http','https') or parsed.netloc!=origin.netloc:
-                continue
-            label=link.get('text') or link.get('accessible_name') or ''
-            if not label or re.search(r'logout|sign.?out|delete|로그아웃|삭제',label+' '+href,re.I):
-                continue
-            tools.append({'name':f'open_page_{index}', 'display_name':label+' 페이지 열기',
-                'description':f'현재 페이지의 {label} 링크로 이동합니다. 작업 완료가 아니며 도착 URL의 스킬을 다시 선택해야 합니다.',
-                'parameters':{'type':'object','properties':{},'required':[]},
-                'steps':[{'op':'navigate','url':href}], 'verification':{'type':'read_only'}})
 
         # 2. Group inputs by inline button or form
         grouped_inputs: Dict[str, List[Dict[str, Any]]] = {}
@@ -481,20 +468,30 @@ class SkillSynthesizerAgent:
             for bt in sample_btns:
                 discovered_list_buttons.append((l_sel, l_head, bt))
 
-        if not discovered_list_buttons and dynamic_hints and lists:
-            combined_code = "\n".join(h.get("snippet", "") for h in dynamic_hints)
-            inner_btns = re.findall(r"(?:innerHTML|innerText|textContent)\s*=\s*['\"]([^'\"]{1,12})['\"]", combined_code)
-            btn_matches = re.findall(r"<button[^>]*>([^<]{1,12})</button>", combined_code)
-            for bt in inner_btns + btn_matches:
-                bt_clean = bt.strip()
-                if not bt_clean:
-                    continue
-                first_list = lists[0]
-                second_list = lists[1] if len(lists) > 1 else first_list
-                target_lst = second_list if bt_clean == "◀" else first_list
-                entry = (target_lst.get("selector", "ul"), target_lst.get("heading", "목록"), bt_clean)
-                if entry not in discovered_list_buttons:
-                    discovered_list_buttons.append(entry)
+        if dynamic_hints and lists:
+            # Bind dynamic button labels to the collection they are actually appended to.
+            # Do not guess a list from source order or register unrelated innerHTML text.
+            for hint in dynamic_hints:
+                code = hint.get('snippet', '')
+                bindings = dict(re.findall(r"([A-Za-z_$][\w$]*)\s*=\s*document\.querySelector\(\s*['\"]([^'\"]+)['\"]\s*\)", code))
+                for body in re.split(r'function\s+[A-Za-z_$][\w$]*\s*\([^)]*\)\s*\{', code):
+                    labels = re.findall(r"([A-Za-z_$][\w$]*)\.(?:innerHTML|innerText|textContent)\s*=\s*['\"]([^'\"]{1,20})['\"]", body)
+                    for list_var, item_var in re.findall(r'([A-Za-z_$][\w$]*)\.appendChild\(\s*([A-Za-z_$][\w$]*)\s*\)', body):
+                        selector = bindings.get(list_var)
+                        collection = next((lst for lst in lists if selector and (
+                            lst.get('selector') == selector or
+                            re.sub(r'^[a-zA-Z][\w-]*(?=[.#])', '', lst.get('selector', '')) == selector)), None)
+                        if not collection:
+                            continue
+                        selector = collection['selector']
+                        for button_var, label in labels:
+                            if not re.search(rf"{re.escape(button_var)}\s*=\s*document\.createElement\(\s*['\"]button['\"]", body):
+                                continue
+                            if not re.search(rf'{re.escape(item_var)}\.appendChild\(\s*{re.escape(button_var)}\s*\)', body):
+                                continue
+                            entry = (selector, collection.get('heading', selector), label.strip())
+                            if entry not in discovered_list_buttons:
+                                discovered_list_buttons.append(entry)
 
         used_names = {t["name"] for t in tools}
         for l_sel, l_head, bt in discovered_list_buttons:
@@ -551,13 +548,13 @@ class SkillSynthesizerAgent:
                 }
             )
 
-        return tools
+        return [tool for tool in tools if is_user_tool(tool)]
 
 
 class SkillExecutorAgent:
     """
     [Agent 2] URL-Bound Skill Executor Agent
-    Model Role: `skill_executor` (Primary: `gemini-2.5-flash`)
+    Model Role: `skill_executor` (Primary: `gemini-4-argon`)
     Executes user instructions using ONLY the tools belonging to the strictly matched URL Skill.
     Also detects if required user inputs or site login are missing.
     """
@@ -746,7 +743,7 @@ class SkillExecutorAgent:
         contents: List[Dict[str, Any]] = [
             {"role": "user", "parts": [{"text": user_prompt}]}
         ]
-        model_used = "gemini-2.5-flash"
+        model_used = "gemini-4-argon"
         agent_message = ""
 
         for _ in range(6):
@@ -938,7 +935,7 @@ class SkillExecutorAgent:
 class RootOrchestratorAgent:
     """
     [Agent 3 - Root Agent]
-    Model Role: `root_verifier` (Primary: `gemini-2.5-pro`)
+    Model Role: `root_verifier` (Primary: `gemini-4-argon`)
     Responsibilities:
     1. Strict URL-Based Skill Resolution:
        - Determines whether to reuse an existing Skill or synthesize a new Skill strictly by URL (`URLMatcher`).
@@ -1010,8 +1007,10 @@ class RootOrchestratorAgent:
         tools, generator_source = self.synthesizer.synthesize_tools(
             snapshot=snapshot,
             failure_feedback=failure_feedback,
+            existing_tools=existing_tools,
         )
-        notify('추출한 스킬을 등록하는 중입니다.')
+        previous = {t['name']:t for t in existing_tools}
+        notify('기존 기능을 유지하며 새 기능을 병합하는 중입니다.' if existing_pkg else '추출한 스킬을 등록하는 중입니다.')
         skill_pkg = self.registry.register_skill(
             target_url=actual_url,
             tools=tools,
@@ -1019,8 +1018,16 @@ class RootOrchestratorAgent:
             synthesized_by=generator_source,
             is_repair=bool(failure_feedback),
         )
+        strip_binding = lambda tool: {key:value for key,value in tool.items() if key not in ('skill_id','bound_normalized_url')}
+        current = {t['name']:t for t in skill_pkg['tools']}
+        added = [name for name in current if name not in previous]
+        updated = [name for name in current if name in previous and strip_binding(current[name]) != strip_binding(previous[name])]
+        refresh_summary = {'mode':'updated' if existing_pkg else 'created', 'added':added, 'updated':updated,
+                           'kept':[name for name in previous if name not in updated and name in current],
+                           'previous_version':existing_pkg.get('version',0) if existing_pkg else 0,
+                           'version':skill_pkg['version']}
         _, _, updated_routing = self.registry.get_tools_strictly_for_url(actual_url)
-        if not force_resynthesize:
+        if not existing_pkg:
             updated_routing["url_matched"] = False
             updated_routing["reason"] = (
                 f"최초 방문 URL ({skill_pkg['normalized_url']}) 분석 완료 → 신규 Skill '{skill_pkg['skill_id']}' 생성 및 에이전트 스킬 레지스트리에 등록됨"
@@ -1032,6 +1039,7 @@ class RootOrchestratorAgent:
 
         return {
             "skill_reused": False,
+            "refresh_summary": refresh_summary,
             "skill_package": skill_pkg,
             "tools": skill_pkg["tools"],
             "routing_decision": updated_routing,
@@ -1039,6 +1047,55 @@ class RootOrchestratorAgent:
             "snapshot": snapshot,
             "screenshot": screenshot,
         }
+
+    def analyze_site(self, target_url, browser_session, force_resynthesize=False, progress=None, observation=None):
+        """Discover linked capability pages without submitting forms or creating sample data."""
+        notify = progress or (lambda message: None)
+        origin = urlparse(URLMatcher.normalize_url(target_url))
+        queue, visited, results = [target_url], set(), []
+        while queue and len(visited) < 6:
+            url = queue.pop(0)
+            if URLMatcher.normalize_url(url) in visited:
+                continue
+            notify(f'기능 페이지 확인 중: {url}')
+            info = browser_session.navigate(url)
+            snapshot = info['snapshot']
+            if observation:
+                observation({'url':snapshot['url'], 'screenshot':info.get('screenshot','')})
+            actual = URLMatcher.normalize_url(snapshot['url'])
+            if urlparse(actual).netloc != origin.netloc:
+                return {'status':'NEEDS_USER_INPUT','message':'외부 로그인 페이지로 이동했습니다. 브라우저에서 로그인 후 분석을 재개하세요.',
+                        'login_url':snapshot['url'], 'analyzed_skills':[r['skill_package'] for r in results],
+                'refresh_summaries':[r.get('refresh_summary',{}) for r in results]}
+            if requires_login(snapshot):
+                return {'status':'NEEDS_USER_INPUT', 'message':'기능 분석을 계속하려면 사이트 로그인이 필요합니다.',
+                        'login_url':snapshot['url'], 'analyzed_skills':[r['skill_package'] for r in results],
+                'refresh_summaries':[r.get('refresh_summary',{}) for r in results]}
+            if actual in visited:
+                continue
+            visited.add(actual)
+            result = self.analyze_and_register_url_skill(
+                actual, browser_session, force_resynthesize=True, progress=notify)
+            results.append(result)
+            for link in snapshot.get('links', []):
+                href = urljoin(actual, link.get('href', ''))
+                label = (link.get('text') or '') + ' ' + href
+                parsed = urlparse(href)
+                if parsed.scheme not in ('http','https') or parsed.netloc != origin.netloc:
+                    continue
+                if re.search(r'logout|sign.?out|delete|remove|publish|register|signup|로그아웃|삭제|회원가입', label, re.I):
+                    continue
+                if snapshot.get('authState', {}).get('is_authenticated') and re.search(r'login|sign.?in|로그인', label, re.I):
+                    continue
+                if re.search(r'write|compose|editor|/new(?:[/?#]|$)|/create(?:[/?#]|$)|login|sign.?in|글.?쓰기|작성|로그인', label, re.I):
+                    if URLMatcher.normalize_url(href) not in visited:
+                        queue.append(href)
+        browser_session.navigate(target_url)
+        if not results:
+            raise ValueError('분석할 페이지를 찾지 못했습니다.')
+        return {**results[0], 'status':'SUCCESS',
+                'analyzed_skills':[r['skill_package'] for r in results],
+                'refresh_summaries':[r.get('refresh_summary',{}) for r in results]}
 
     def verify_execution(self, user_prompt, before_snapshot, after_snapshot, steps, browser_session=None):
         """Delegate result checking to an agent independent of the executor."""

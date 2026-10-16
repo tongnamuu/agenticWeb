@@ -14,6 +14,7 @@ import requests
 import websocket
 
 from agentic_web.engine.skills.registry import URLMatcher
+from agentic_web.engine.browser.auth import requires_login
 
 
 CHROME_PATHS = [
@@ -144,6 +145,23 @@ class BrowserSession:
         self._send_cdp("Page.enable")
         self._send_cdp("Runtime.enable")
         self._send_cdp("DOM.enable")
+
+    def show_for_login(self):
+        """Expose this session, preserving its profile when leaving headless mode."""
+        import sys
+        if sys.platform != 'darwin' and not os.environ.get('DISPLAY'):
+            raise RuntimeError('이 서버에는 브라우저 화면 연결이 없습니다. 원격 브라우저 화면 연결을 설정해야 직접 로그인할 수 있습니다.')
+        url = self.current_url
+        if self.headless:
+            self.start(headless=False)
+            if url:
+                self.navigate(url)
+        else:
+            self.start()
+        self._send_cdp('Page.bringToFront')
+        window = self._send_cdp('Browser.getWindowForTarget')
+        self._send_cdp('Browser.setWindowBounds', {
+            'windowId': window['windowId'], 'bounds': {'windowState': 'normal'}})
 
     def _send_cdp(self, method: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         with self._lock:
@@ -414,7 +432,9 @@ class BrowserSession:
                 // 5. Lists / Collections
                 const collections = [];
                 Array.from(document.querySelectorAll("ul, ol, tbody, [role='list'], [role='table'], [role='grid']")).forEach((container) => {
-                    if (!isVisible(container) && container.children.length === 0) return;
+                    // Empty lists often have zero height; retain them for dynamic action discovery.
+                    if (container.closest('[hidden], .hidden, .not-display') ||
+                        getComputedStyle(container).display === 'none') return;
                     let prev = container.previousElementSibling;
                     let heading = container.getAttribute("aria-label") || "";
                     while (prev && !heading) {
@@ -460,9 +480,9 @@ class BrowserSession:
 
                 // 7. Authentication / Login Gate Detection
                 const passwordInputs = inputs.filter(i => i.type === "password" || /비밀번호|암호|password|passwd/i.test(i.label + " " + i.placeholder + " " + i.name));
-                const userInputs = inputs.filter(i => i !== passwordInputs[0] && /아이디|이메일|계정|사용자|username|userid|email|login/i.test(i.label + " " + i.placeholder + " " + i.name));
-                const loginButtons = buttons.filter(b => /로그인|sign in|log in|인증/i.test(b.text));
-                const logoutButtons = buttons.filter(b => /로그아웃|sign out|log out/i.test(b.text));
+                const userInputs = inputs.filter(i => i !== passwordInputs[0] && /아이디|이메일|계정|사용자|username|userid|email|login|name|이름/i.test(i.label + " " + i.placeholder + " " + i.name));
+                const loginButtons = buttons.filter(b => /로그인|sign\\s*in|log\\s*in|인증/i.test(b.text));
+                const logoutButtons = buttons.filter(b => /로그아웃|sign\\s*out|log\\s*out/i.test(b.text));
                 const explicitAuthGate = Boolean(document.querySelector('[data-requires-auth="true"]:not([data-authenticated="true"]), #loginGate:not(.hidden), .login-wall:not(.hidden)'));
 
                 const loginWallDetected = (passwordInputs.length > 0 && (userInputs.length > 0 || loginButtons.length > 0)) || explicitAuthGate;
@@ -480,19 +500,21 @@ class BrowserSession:
                 // 8. Script hints (inline & external same-origin scripts)
                 const dynamicHints = [];
                 const inlineScripts = Array.from(document.querySelectorAll("script:not([src])")).map(s => s.innerText || "").filter(Boolean);
-                for (const code of inlineScripts.slice(0, 4)) {
+                for (const code of inlineScripts.slice(0, 8)) {
                     if (code.includes("createElement") || code.includes("addEventListener") || code.includes("innerHTML")) {
-                        dynamicHints.push({ src: "inline", snippet: code.slice(0, 2500) });
+                        dynamicHints.push({ src: "inline", snippet: code.slice(0, 32000) });
                     }
                 }
                 const scriptSrcs = Array.from(document.querySelectorAll("script[src]")).map(s => s.getAttribute("src")).filter(Boolean);
-                for (const src of scriptSrcs.slice(0, 4)) {
+                for (const src of scriptSrcs.slice(0, 12)) {
                     try {
-                        const res = await fetch(src);
+                        const scriptUrl = new URL(src, window.location.href);
+                        if (scriptUrl.origin !== window.location.origin) continue;
+                        const res = await fetch(scriptUrl.href, {signal: AbortSignal.timeout(3000)});
                         if (res.ok) {
                             const code = await res.text();
                             if (code.includes("createElement") || code.includes("addEventListener") || code.includes("submit")) {
-                                dynamicHints.push({ src, snippet: code.slice(0, 2500) });
+                                dynamicHints.push({ src, snippet: code.slice(0, 32000) });
                             }
                         }
                     } catch (e) {}
@@ -519,6 +541,9 @@ class BrowserSession:
             self.current_url = dom_snapshot["url"]
             dom_snapshot["normalized_url"] = URLMatcher.normalize_url(self.current_url)
 
+        if dom_snapshot and requires_login(dom_snapshot):
+            dom_snapshot.setdefault('authState', {})['login_wall_detected'] = True
+            dom_snapshot['authState']['is_authenticated'] = False
         screenshot = self.capture_screenshot()
         return {
             "snapshot": dom_snapshot,

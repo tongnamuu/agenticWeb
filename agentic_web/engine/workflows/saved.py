@@ -27,7 +27,7 @@ def validate_arguments(tool, arguments):
         required = list(props)
     else:
         props, required = schema.get('properties', {}), schema.get('required', [])
-    missing = [key for key in required if key not in arguments or arguments[key] is None]
+    missing = [key for key in required if key not in arguments or arguments[key] is None or isinstance(arguments[key], str) and not arguments[key].strip()]
     if missing:
         raise ValueError('필수 입력값: ' + ', '.join(missing))
     if set(arguments) - set(props):
@@ -155,7 +155,7 @@ class SavedWorkflows:
                     return run
                 for attempt in (1, 2):
                     output = self.browser.execute_tool(tool, step['arguments'])
-                    record = {'tool_name': tool['name'], 'args': step['arguments'],
+                    record = {'tool_name': tool['name'], 'args': step['arguments'], 'operations': tool.get('steps', []),
                               'action_result': output['action_result'], 'verification': output['verification']}
                     verdict = self.verifier.verify_execution(
                         user_prompt=f"{tool['description']} 입력값: {json.dumps(step['arguments'], ensure_ascii=False)}",
