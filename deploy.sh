@@ -59,8 +59,22 @@ if [ -z "${FLASK_SECRET_KEY:-}" ]; then
   FLASK_SECRET_KEY="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
 fi
 
-echo "🔧 Cloud Run / Cloud Build / Artifact Registry API 활성화 중..."
-gcloud services enable run.googleapis.com cloudbuild.googleapis.com artifactregistry.googleapis.com --project "$PROJECT_ID"
+echo "🔧 Cloud Run / Cloud Build / Artifact Registry / Cloud Firestore API 활성화 중..."
+gcloud services enable \
+  run.googleapis.com \
+  cloudbuild.googleapis.com \
+  artifactregistry.googleapis.com \
+  firestore.googleapis.com \
+  --project "$PROJECT_ID"
+
+echo "🗄️ Cloud Firestore (Native 모드) 데이터베이스 확인 및 생성 중..."
+if ! gcloud firestore databases describe --database="(default)" --project="$PROJECT_ID" >/dev/null 2>&1; then
+  gcloud firestore databases create \
+    --database="(default)" \
+    --location="$REGION" \
+    --type=firestore-native \
+    --project="$PROJECT_ID" || true
+fi
 
 INITIAL_REDIRECT_URI="${GOOGLE_REDIRECT_URI:-}"
 if [[ -z "$INITIAL_REDIRECT_URI" || "$INITIAL_REDIRECT_URI" == http://127.0.0.1* || "$INITIAL_REDIRECT_URI" == http://localhost* ]]; then
@@ -69,6 +83,7 @@ fi
 
 echo "📦 Cloud Run 컨테이너 빌드 및 배포 시작..."
 gcloud run deploy "$SERVICE_NAME" \
+  --quiet \
   --source . \
   --project "$PROJECT_ID" \
   --region "$REGION" \
@@ -78,7 +93,7 @@ gcloud run deploy "$SERVICE_NAME" \
   --timeout 300 \
   --concurrency 4 \
   --max-instances 1 \
-  --set-env-vars="HEADLESS_BROWSER=true,GEMINI_API_KEY=${GEMINI_API_KEY:-},FLASK_SECRET_KEY=${FLASK_SECRET_KEY},GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-},GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-},GOOGLE_REDIRECT_URI=${INITIAL_REDIRECT_URI}"
+  --set-env-vars="HEADLESS_BROWSER=true,USE_FIRESTORE=true,GOOGLE_CLOUD_PROJECT=${PROJECT_ID},GEMINI_API_KEY=${GEMINI_API_KEY:-},FLASK_SECRET_KEY=${FLASK_SECRET_KEY},GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-},GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-},GOOGLE_REDIRECT_URI=${INITIAL_REDIRECT_URI}"
 
 SERVICE_URL="$(gcloud run services describe "$SERVICE_NAME" --project "$PROJECT_ID" --region "$REGION" --format='value(status.url)')"
 CALLBACK_URI="${SERVICE_URL}/auth/google/callback"
@@ -86,6 +101,7 @@ CALLBACK_URI="${SERVICE_URL}/auth/google/callback"
 if [ "$INITIAL_REDIRECT_URI" != "$CALLBACK_URI" ]; then
   echo "🔗 서비스 URL 확정됨 ($SERVICE_URL) -> GOOGLE_REDIRECT_URI 자동 업데이트 중..."
   gcloud run services update "$SERVICE_NAME" \
+    --quiet \
     --project "$PROJECT_ID" \
     --region "$REGION" \
     --update-env-vars="GOOGLE_REDIRECT_URI=${CALLBACK_URI}"
