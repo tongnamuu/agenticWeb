@@ -106,12 +106,13 @@
 
   <!-- HITL Modal (Login Required / Missing User Input) -->
   <div id="hitl-modal" class="fixed inset-0 bg-black/75 backdrop-blur-sm hidden items-center justify-center z-50 p-4">
-    <div class="bg-slate-900 border border-amber-500/50 rounded-2xl max-w-md w-full p-6 shadow-2xl">
+    <div class="bg-slate-900 border border-amber-500/50 rounded-2xl max-w-5xl w-full p-6 max-h-[95vh] overflow-y-auto shadow-2xl">
       <div class="flex items-center gap-2 text-amber-400 font-bold text-sm mb-2">
         <span>⚠️ 사용자 입력 / 로그인 요청 (Human-in-the-Loop)</span>
       </div>
       <p id="hitl-prompt-text" class="text-xs text-slate-200 leading-relaxed mb-4"></p>
 
+      <iframe id="remote-browser" title="실행기 브라우저 로그인" class="hidden w-full h-[65vh] border border-slate-700 rounded mb-4"></iframe>
       <!-- Login Form Section -->
       <div id="hitl-login-fields" class="space-y-2.5 mb-4 hidden">
         <div>
@@ -429,6 +430,8 @@
 
     function closeHitlModal() {
       loginWatch++;
+      const frame = document.getElementById('remote-browser');
+      frame.src = 'about:blank'; frame.classList.add('hidden');
       const modal = document.getElementById('hitl-modal');
       modal.classList.add('hidden');
       modal.classList.remove('flex');
@@ -441,8 +444,10 @@
       button.disabled = true;
       const watch = ++loginWatch;
       try {
-        await requestJson('/api/login-browser', {method:'POST'});
-        document.getElementById('hitl-prompt-text').textContent = '열린 실행기 브라우저에서 로그인하세요. GitHub 등 외부 로그인도 그 창에서 진행하면 됩니다. 완료 후 자동으로 이어집니다.';
+        const remote = await requestJson('/api/login-browser', {method:'POST'});
+        const frame = document.getElementById('remote-browser');
+        frame.src = remote.view_url; frame.classList.remove('hidden');
+        document.getElementById('hitl-prompt-text').textContent = '아래 실행기 브라우저 화면에서 로그인하세요. GitHub 등 외부 로그인도 그 창에서 진행하면 됩니다. 완료 후 자동으로 이어집니다.';
         const url = pendingHitlContext.url;
         while (watch === loginWatch && pendingHitlContext) {
           await new Promise(resolve => setTimeout(resolve, 2000));

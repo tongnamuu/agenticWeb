@@ -82,12 +82,29 @@
     });
   }
   async function refresh() {
-    try {
-      const [catalog, workflows] = await Promise.all([api('/api/skills'), api('/api/workflows')]);
-      state.sites = catalog.sites || [];
-      state.skills = state.sites.flatMap(site => site.packages.map(pkg => ({...pkg, site_title:site.name})));  state.saved = workflows.workflows || [];
-      renderCatalog(); renderSaved();
-    } catch (error) { notice(error.message); }
+    const [catalogResult, savedResult] = await Promise.allSettled([api('/api/skills'), api('/api/workflows')]);
+    if (catalogResult.status === 'fulfilled') {
+      const catalog = catalogResult.value;
+      state.skills = catalog.skills || [];
+      const groups = new Map();
+      for (const pkg of state.skills) {
+        const origin = new URL(pkg.normalized_url).origin;
+        const metadata = (catalog.sites || []).find(site => site.origin === origin);
+        if (!groups.has(origin)) groups.set(origin, {origin, name:metadata?.name || pkg.skill_name || pkg.site_title, packages:[]});
+        groups.get(origin).packages.push(pkg);
+      }
+      state.sites = [...groups.values()];
+      renderCatalog();
+      document.getElementById('workflow-catalog-status').textContent = `${state.sites.length}개 사이트 · ${state.skills.reduce((n, pkg) => n + (pkg.tools || []).length, 0)}개 스킬`;
+    } else {
+      document.getElementById('workflow-catalog-status').textContent = '스킬을 불러오지 못했습니다: ' + catalogResult.reason.message;
+    }
+    if (savedResult.status === 'fulfilled') {
+      state.saved = savedResult.value.workflows || [];
+      renderSaved();
+    } else {
+      document.getElementById('workflow-saved').replaceChildren(el('p', '저장 목록을 불러오지 못했습니다: ' + savedResult.reason.message, 'wf-muted'));
+    }
   }
   function renderSaved() {
     const box = document.getElementById('workflow-saved'); box.replaceChildren();
@@ -111,7 +128,23 @@
       }));
       const execute = button('실행 ▶', () => run(workflow.id));
       execute.classList.add('wf-primary'); execute.dataset.workflowRun = workflow.id;
-      execute.disabled = state.busy; row.append(execute); box.append(row);
+      execute.disabled = state.busy; row.append(execute);
+      const remove = button('삭제', async () => {
+        if (state.busy || !window.confirm(`“${workflow.name}” 워크플로우를 삭제할까요? 사이트와 스킬은 유지됩니다.`)) return;
+        setBusy(true);
+        try {
+          await api(`/api/workflows/${workflow.id}/delete`, {});
+          state.saved = state.saved.filter(item => item.id !== workflow.id);
+          if (state.id === workflow.id) {
+            state.id = null; state.steps = [];
+            document.getElementById('workflow-name').value = ''; renderSteps();
+          }
+          renderSaved(); notice('워크플로우를 삭제했습니다.');
+        } catch (error) { notice(error.message); }
+        finally { setBusy(false); }
+      });
+      remove.dataset.workflowRun = workflow.id; remove.disabled = state.busy;
+      remove.style.color = '#fca5a5'; row.append(remove); box.append(row);
     }
   }
   function renderRun(job) {
@@ -158,7 +191,11 @@
           if (state.busy) return;
           setBusy(true);
           try {
-            await api('/api/login-browser', {});
+            const remote = await api('/api/login-browser', {});
+            const frame = document.createElement('iframe');
+            frame.src = remote.view_url; frame.title = '실행기 브라우저 로그인';
+            frame.style.cssText = 'width:100%;height:650px;border:1px solid #475569';
+            output.append(frame);
             notice('실행기 브라우저에서 로그인하세요. 완료되면 자동 재개합니다.');
             const url = data.workflow.steps[data.next_step].url;
             while (true) {
@@ -197,5 +234,6 @@
   document.getElementById('workflow-save').onclick = () => saveCurrent();
   document.getElementById('workflow-run').onclick = () => saveCurrent(true);
   window.addEventListener('skills-updated', refresh);
+  window.addEventListener('focus', () => { if (!state.busy) refresh(); });
   renderSteps(); refresh();
 })();

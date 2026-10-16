@@ -52,7 +52,7 @@ def protect_request():
 
 
 def private_response(response):
-    if request.path in ('/', '/workflows') or request.path.startswith(('/auth/', '/api/')):
+    if request.path in ('/', '/workflows', '/browser-session') or request.path.startswith(('/auth/', '/api/')):
         response.headers['Cache-Control'] = 'no-store'
     return response
 

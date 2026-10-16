@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="csrf-token" content="{{ csrf_token() }}"><title>실행기 브라우저 로그인</title>
+<script src="{{ url_for('static', filename='auth.js') }}" defer></script>
+<script src="{{ url_for('static', filename='browser_session.js') }}" defer></script>
+<style>body{margin:0;background:#0f172a;color:#e2e8f0;font:14px sans-serif}header{padding:12px;position:sticky;top:0;background:#0f172a;z-index:1}button,input,select{padding:8px;margin:3px;background:#1e293b;color:white;border:1px solid #64748b;border-radius:5px}#screen{display:block;width:100%;outline:0;cursor:crosshair}#screen:focus{outline:2px solid #818cf8;outline-offset:-2px}#url{overflow-wrap:anywhere;color:#67e8f9}#status{color:#fbbf24}form{display:flex;flex-wrap:wrap}input{flex:1;min-width:120px}select{max-width:100%}</style></head>
+<body><header><strong>실행기 브라우저 · 직접 로그인</strong>
+<p>아래 화면을 클릭하고 입력하세요. 외부 로그인 창이 뜨면 탭 목록에서 선택하세요. 로그인 후 원래 사이트 탭으로 돌아오면 작업이 자동 재개됩니다.</p>
+<select id="tabs" aria-label="실행기 브라우저 탭"></select><button id="refresh">화면 새로고침</button>
+<p id="url"></p><p id="status" role="status">화면 연결 중…</p>
+<form id="text-form"><input id="text" type="password" autocomplete="off" placeholder="한글·비밀번호 입력 후 전달" aria-label="브라우저에 전달할 텍스트"><button>텍스트 전달</button></form>
+<button data-key="Tab">Tab</button><button data-key="Enter">Enter</button><button data-key="Backspace">지우기</button><button id="select-all">전체 선택</button>
+</header><img id="screen" tabindex="0" alt="로그인할 서버 브라우저 화면"></body></html>

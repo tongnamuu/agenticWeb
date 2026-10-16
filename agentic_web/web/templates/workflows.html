@@ -33,7 +33,7 @@
   <section class="wf-panel" aria-label="워크플로우 편집기">
     <div class="wf-heading"><div><h2>워크플로우 만들기</h2><p class="wf-muted">사이트별 기능을 골라 원하는 순서로 연결하세요. 예: 할 일 추가 → 블로그 작성 → 할 일 완료</p></div><button type="button" class="wf-button" id="workflow-refresh">새로고침</button></div>
     <div class="wf-grid">
-      <div><h3>등록된 사이트와 스킬</h3><div id="workflow-catalog" class="wf-scroll"></div></div>
+      <div><h3>등록된 사이트와 스킬</h3><p id="workflow-catalog-status" role="status" class="wf-muted">스킬 목록 불러오는 중…</p><div id="workflow-catalog" class="wf-scroll"></div></div>
       <div><div class="wf-heading"><h3>워크플로우 만들기 <span id="workflow-step-count" class="wf-muted">0단계</span></h3><button type="button" class="wf-button" id="workflow-new">새로 만들기</button></div>
         <label class="wf-label">워크플로우 이름<input id="workflow-name" class="wf-input" placeholder="블로그 작성 후 할 일 완료" maxlength="200"></label>
         <div id="workflow-steps" class="wf-scroll"></div>
@@ -49,5 +49,5 @@
     </div>
   </section>
 </main></div>
-<script src="{{ url_for('static', filename='workflows.js') }}" defer></script>
+<script src="{{ url_for('static', filename='workflows.js', v='20261016-4') }}" defer></script>
 </body></html>

@@ -39,6 +39,20 @@ class WorkflowApiTests(unittest.TestCase):
                 self.assertEqual(client.get('/api/workflows').json['workflows'], [])
                 self.assertEqual(client.get('/api/workflow-jobs/'+job_id).status_code, 404)
                 self.assertEqual(client.post('/api/workflows/'+saved['id']+'/run', json={}, headers=headers).status_code, 409)
+                endpoint = '/api/workflows/'+saved['id']+'/delete'
+                self.assertEqual(client.post(endpoint, headers=headers).status_code, 404)
+                with client.session_transaction() as session:
+                    session['user'] = {'id':'alice'}
+                self.assertEqual(client.post(endpoint).status_code, 403)
+                services.lock.acquire()
+                try:
+                    self.assertEqual(client.post(endpoint, headers=headers).status_code, 409)
+                finally:
+                    services.lock.release()
+                self.assertEqual(client.post(endpoint, headers=headers).status_code, 200)
+                self.assertEqual(client.get('/api/workflows').json['workflows'], [])
+                self.assertTrue(services.orchestrator.registry.list_all_skills())
+
 
     def test_browser_busy_prevents_workflow_start(self):
         from types import SimpleNamespace

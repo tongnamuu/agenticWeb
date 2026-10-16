@@ -29,9 +29,10 @@ def serialize_browser_requests():
     if not g.user:
         return
     g.services = current_app.extensions['user_services'].for_user(g.user['id'])
-    browser_paths = { '/api/execute', '/api/call-tool', '/api/state', '/api/delete-skill', '/api/rename-skill', '/api/site-login', '/api/login-browser', '/api/login-status'}
+    browser_paths = { '/api/execute', '/api/call-tool', '/api/state', '/api/delete-skill', '/api/rename-skill', '/api/site-login', '/api/login-browser', '/api/login-status', '/api/browser/frame', '/api/browser/control'}
     if request.path in browser_paths:
-        if not g.services.lock.acquire(blocking=False):
+        acquired = g.services.lock.acquire(timeout=2) if request.path in ('/api/browser/control', '/api/login-status') else g.services.lock.acquire(blocking=False)
+        if not acquired:
             return jsonify(ok=False, error='다른 브라우저 작업이 실행 중입니다. 완료 후 다시 시도하세요.'), 409
         g.browser_request_locked = True
 
@@ -119,11 +120,7 @@ def api_resume_analysis(job_id):
 
 @routes.route('/api/login-browser', methods=['POST'])
 def api_login_browser():
-    try:
-        browser_session.show_for_login()
-        return jsonify(ok=True)
-    except RuntimeError as exc:
-        return jsonify(ok=False, error=str(exc)), 409
+    return jsonify(ok=True, mode='remote', view_url=url_for('studio.browser_view'))
 
 
 @routes.route('/api/login-status', methods=['POST'])
@@ -329,3 +326,52 @@ def api_workflow_status(job_id):
     if job is None:
         return jsonify(ok=False, error='실행을 찾을 수 없습니다.'), 404
     return jsonify(ok=True, job=job)
+
+
+@routes.route('/api/workflows/<identifier>/delete', methods=['POST'])
+def api_delete_workflow(identifier):
+    if not g.services.lock.acquire(blocking=False):
+        return jsonify(ok=False, error='실행이 끝난 후 삭제하세요.'), 409
+    try:
+        g.services.workflows.delete(identifier)
+        return jsonify(ok=True)
+    except ValueError as exc:
+        return jsonify(ok=False, error=str(exc)), 404
+    except RuntimeError as exc:
+        return jsonify(ok=False, error=str(exc)), 503
+    finally:
+        g.services.lock.release()
+
+
+@routes.route('/browser-session')
+def browser_view():
+    if not g.user:
+        return redirect(url_for('auth.login'))
+    response = current_app.make_response(render_template('browser_session.html'))
+    response.headers['Content-Security-Policy'] = "frame-ancestors 'self'"
+    response.headers['X-Frame-Options'] = 'SAMEORIGIN'
+    return response
+
+
+@routes.route('/api/browser/frame')
+def api_browser_frame():
+    from agentic_web.engine.browser.remote import frame
+    try:
+        return jsonify(ok=True, **frame(browser_session))
+    except Exception:
+        return jsonify(ok=False, error='브라우저 화면을 읽지 못했습니다. 탭을 선택하거나 다시 시도하세요.'), 503
+
+
+@routes.route('/api/browser/control', methods=['POST'])
+def api_browser_control():
+    from agentic_web.engine.browser.remote import control
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify(ok=False, error='잘못된 입력입니다.'), 400
+    try:
+        control(browser_session, data)
+        return jsonify(ok=True)
+    except ValueError as exc:
+        return jsonify(ok=False, error=str(exc)), 400
+    except Exception:
+        return jsonify(ok=False, error='브라우저 입력을 전달하지 못했습니다.'), 503

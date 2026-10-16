@@ -109,7 +109,8 @@ class SiteApiTests(unittest.TestCase):
                     session['csrf_token'] = 'csrf'
                 headers = {'X-CSRF-Token': 'csrf'}
                 self.assertEqual(client.post('/api/login-browser', headers=headers).status_code, 200)
-                browser.show_for_login.assert_called_once_with()
+                browser.show_for_login.assert_not_called()
+                self.assertEqual(client.post('/api/login-browser', headers=headers).json['view_url'], '/browser-session')
                 for url, auth, expected in [
                     ('https://github.com/login', True, False),
                     ('https://blog.test/login', False, False),

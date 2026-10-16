@@ -105,6 +105,13 @@ class SavedWorkflows:
             self._firestore.set_document(identifier, wf)
         return wf
 
+    def delete(self, identifier):
+        self.get(identifier)
+        if self._firestore.enabled and not self._firestore.delete_document(identifier):
+            raise RuntimeError('DB에서 삭제하지 못했습니다. 다시 시도하세요.')
+        (self.directory / (identifier + '.json')).unlink(missing_ok=True)
+        self.runs = {key: run for key, run in self.runs.items() if run['workflow']['id'] != identifier}
+
     def save(self, data):
         name = str(data.get('name') or '').strip()
         steps = data.get('steps')
