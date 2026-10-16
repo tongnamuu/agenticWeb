@@ -2,15 +2,15 @@
   const screen = document.getElementById('screen');
   const status = document.getElementById('status');
   const tabs = document.getElementById('tabs');
-  let viewport = null, refreshing = false, queue = Promise.resolve(), tabSignature = '';
+  let viewport = null, refreshing = false, queue = Promise.resolve(), tabSignature = '', pendingInputs = 0;
   async function request(url, data) {
     const response = await fetch(url, data === undefined ? {cache:'no-store'} : {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)});
     const body = await response.json();
-    if (!response.ok) throw new Error(body.error || '연결 실패');
+    if (!response.ok) {const error = new Error(body.error || '연결 실패'); error.status = response.status; throw error;}
     return body;
   }
   async function refresh() {
-    if (refreshing) return;
+    if (refreshing || pendingInputs) return;
     refreshing = true;
     try {
       const frame = await request('/api/browser/frame');
@@ -32,8 +32,18 @@
     finally { refreshing = false; }
   }
   function send(data) {
-    queue = queue.then(() => request('/api/browser/control', data))
-      .then(() => refresh()).catch(error => {status.textContent = error.message;});
+    pendingInputs++;
+    queue = queue.then(async () => {
+      for (let attempt = 0; attempt < 4; attempt++) {
+        try { return await request('/api/browser/control', data); }
+        catch (error) {
+          // 409 means the input has not run: retry only this explicit rejection.
+          if (error.status !== 409 || attempt === 3) throw error;
+          await new Promise(resolve => setTimeout(resolve, 250));
+        }
+      }
+    }).catch(error => {status.textContent = error.message;})
+      .finally(() => {pendingInputs--; if (!pendingInputs) refresh();});
     return queue;
   }
   function point(event) {

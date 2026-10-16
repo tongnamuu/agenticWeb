@@ -61,7 +61,7 @@ def control(browser, data):
         if type(modifiers) is not int or not 0 <= modifiers <= 15:
             raise ValueError('잘못된 키 조합입니다.')
         params = {'key': key, 'windowsVirtualKeyCode': keys[key], 'modifiers': modifiers}
-        browser._send_cdp('Input.dispatchKeyEvent', {**params, 'type': 'rawKeyDown'})
+        browser._send_cdp('Input.dispatchKeyEvent', {**params, 'type': 'keyDown', **({'text':'\r'} if key == 'Enter' else {})})
         browser._send_cdp('Input.dispatchKeyEvent', {**params, 'type': 'keyUp'})
         return
     if action not in ('click', 'scroll'):
@@ -77,3 +77,17 @@ def control(browser, data):
         if type(delta) not in (int, float) or not math.isfinite(delta) or abs(delta) > 2000:
             raise ValueError('잘못된 스크롤 값입니다.')
         browser._send_cdp('Input.dispatchMouseEvent', {'type':'mouseWheel', 'x':x, 'y':y, 'deltaX':0, 'deltaY':delta})
+
+
+def login_snapshot(browser):
+    """Small read-only poll; never fetch scripts or screenshots while the user types."""
+    snapshot = browser.evaluate_js(r"""() => {
+      const visible = element => !!(element.offsetWidth || element.offsetHeight || element.getClientRects().length);
+      const controls = Array.from(document.querySelectorAll('button,a,input[type=submit]')).filter(visible);
+      const labels = controls.map(element => (element.innerText || element.value || element.getAttribute('aria-label') || '').trim());
+      const inputs = Array.from(document.querySelectorAll('input')).filter(visible).map(element => ({type:element.type}));
+      const authenticated = labels.some(label => /로그아웃|\blog\s*out\b|\bsign\s*out\b/i.test(label)) || !!document.querySelector('[data-authenticated="true"]');
+      return {url:location.href, inputs, buttons:labels.map(text => ({text})), authState:{is_authenticated:authenticated}};
+    }""")
+    browser.current_url = snapshot['url']
+    return snapshot

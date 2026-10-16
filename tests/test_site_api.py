@@ -120,7 +120,7 @@ class SiteApiTests(unittest.TestCase):
                     ('https://blog.test/login', False, False),
                     ('https://blog.test/', True, True),
                 ]:
-                    browser.inspect_page.return_value = {'snapshot': {'url': url, 'authState': {'is_authenticated': auth}}}
+                    browser.evaluate_js.return_value = {'url': url, 'authState': {'is_authenticated': auth}}
                     response = client.post('/api/login-status', json={'url':'https://blog.test/'}, headers=headers)
                     self.assertEqual(response.json['authenticated'], expected)
                 browser.navigate.assert_not_called()

@@ -139,7 +139,8 @@ def api_login_status():
     from urllib.parse import urlparse
     data = request.get_json(silent=True) or {}
     target = URLMatcher.normalize_url(data.get('url', ''))
-    snapshot = browser_session.inspect_page()['snapshot']
+    from agentic_web.engine.browser.remote import login_snapshot
+    snapshot = login_snapshot(browser_session)
     actual = snapshot.get('url', '')
     expected, observed = urlparse(target), urlparse(actual)
     same_origin = bool(target) and (expected.scheme, expected.netloc) == (observed.scheme, observed.netloc)

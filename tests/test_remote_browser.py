@@ -44,3 +44,19 @@ class RemoteBrowserTests(unittest.TestCase):
                     page = client.get('/browser-session')
                     self.assertEqual(page.headers['X-Frame-Options'],'SAMEORIGIN')
                     self.assertEqual(page.headers['Cache-Control'],'no-store')
+
+    def test_login_poll_does_not_run_full_analysis_or_capture(self):
+        from agentic_web.engine.browser.remote import login_snapshot
+        browser = Mock()
+        browser.evaluate_js.return_value = {'url':'https://blog.test/', 'authState':{'is_authenticated':True}}
+        self.assertTrue(login_snapshot(browser)['authState']['is_authenticated'])
+        browser.inspect_page.assert_not_called()
+        browser.capture_screenshot.assert_not_called()
+        self.assertEqual(browser.current_url, 'https://blog.test/')
+
+    def test_enter_sends_browser_keydown_with_return_character(self):
+        browser = Mock()
+        control(browser, {'action':'key', 'key':'Enter'})
+        first = browser._send_cdp.call_args_list[0].args
+        self.assertEqual(first[1]['type'], 'keyDown')
+        self.assertEqual(first[1]['text'], '\r')

@@ -206,15 +206,17 @@
         output.append(button('로그인 브라우저로 이동 · 자동 재개', async () => {
           if (state.busy) return;
           setBusy(true);
+          const loginWindow = window.open('about:blank', '_blank');
+          if (loginWindow) loginWindow.opener = null;
           try {
             const remote = await api('/api/login-browser', {});
             if (remote.mode === 'remote') {
-            const frame = document.createElement('iframe');
-            frame.src = remote.view_url; frame.title = '실행기 브라우저 로그인';
-            frame.style.cssText = 'width:100%;height:650px;border:1px solid #475569';
-            output.append(frame);
-            }
-            notice(remote.mode === 'native' ? '열린 Chrome 실행기 창에서 로그인하세요. 완료되면 자동 재개합니다.' : '아래 브라우저 화면에서 로그인하세요. 완료되면 자동 재개합니다.');
+              const link = el('a', '로그인 브라우저 탭 열기', 'wf-button');
+              link.href = remote.view_url; link.target = '_blank'; link.rel = 'noopener';
+              output.append(link);
+              if (loginWindow) {loginWindow.location.replace(remote.view_url); loginWindow.focus();}
+            } else if (loginWindow) loginWindow.close();
+            notice(remote.mode === 'native' ? '열린 Chrome 실행기 창에서 로그인하세요. 완료되면 자동 재개합니다.' : '새 브라우저 탭에서 로그인하세요. 탭이 차단되면 로그인 브라우저 링크를 누르세요.');
             const url = data.workflow.steps[data.next_step].url;
             while (true) {
               await new Promise(resolve => setTimeout(resolve, 2000));

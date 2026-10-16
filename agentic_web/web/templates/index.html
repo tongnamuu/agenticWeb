@@ -112,7 +112,7 @@
       </div>
       <p id="hitl-prompt-text" class="text-xs text-slate-200 leading-relaxed mb-4"></p>
 
-      <iframe id="remote-browser" title="실행기 브라우저 로그인" class="hidden w-full h-[65vh] border border-slate-700 rounded mb-4"></iframe>
+      <a id="remote-browser-link" class="hidden text-indigo-300 underline block mb-4" href="/browser-session" target="_blank" rel="noopener">로그인 브라우저 탭 열기</a>
       <!-- Login Form Section -->
       <div id="hitl-login-fields" class="space-y-2.5 mb-4 hidden">
         <div>
@@ -430,8 +430,7 @@
 
     function closeHitlModal() {
       loginWatch++;
-      const frame = document.getElementById('remote-browser');
-      frame.src = 'about:blank'; frame.classList.add('hidden');
+      document.getElementById('remote-browser-link').classList.add('hidden');
       const modal = document.getElementById('hitl-modal');
       modal.classList.add('hidden');
       modal.classList.remove('flex');
@@ -443,15 +442,21 @@
       const button = document.getElementById('hitl-direct-login-btn');
       button.disabled = true;
       const watch = ++loginWatch;
+      const loginWindow = window.open('about:blank', '_blank');
+      if (loginWindow) loginWindow.opener = null;
       try {
         const remote = await requestJson('/api/login-browser', {method:'POST'});
-        const frame = document.getElementById('remote-browser');
+        const link = document.getElementById('remote-browser-link');
         if (remote.mode === 'remote') {
-          frame.src = remote.view_url; frame.classList.remove('hidden');
-        } else { frame.src = 'about:blank'; frame.classList.add('hidden'); }
+          link.href = remote.view_url; link.classList.remove('hidden');
+          if (loginWindow) {loginWindow.location.replace(remote.view_url); loginWindow.focus();}
+        } else {
+          if (loginWindow) loginWindow.close();
+          link.classList.add('hidden');
+        }
         document.getElementById('hitl-prompt-text').textContent = remote.mode === 'native' ?
           '열린 Chrome 실행기 창에서 로그인하세요. 완료되면 자동 재개합니다.' :
-          '아래 실행기 브라우저 화면에서 로그인하세요. 완료되면 자동 재개합니다.';
+          '새로 열린 브라우저 탭에서 로그인하세요. 탭이 차단되면 위 링크를 누르세요. 완료되면 자동 재개합니다.';
         const url = pendingHitlContext.url;
         while (watch === loginWatch && pendingHitlContext) {
           await new Promise(resolve => setTimeout(resolve, 2000));
