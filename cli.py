@@ -17,7 +17,6 @@ import sys
 from typing import Any, Dict, Optional
 
 from agent import browser_session, orchestrator
-from config import TARGET_URL
 
 
 def print_banner() -> None:
@@ -128,15 +127,18 @@ def main() -> None:
         run_single_goal(args.url, args.goal)
         return
 
-    current_url = args.url or TARGET_URL
+    current_url = args.url
     while True:
         try:
             print(f"\n현재 등록된 URL 스킬 수: {len(orchestrator.registry.list_all_skills())}")
-            url_in = input(f"대상 URL 입력 (Enter 시 기본값 '{current_url}', 종료 'q'): ").strip()
+            url_in = input(f"대상 URL 입력 (Enter 시 이전 URL '{current_url}', 종료 'q'): ").strip()
             if url_in.lower() == "q":
                 break
             if url_in:
                 current_url = url_in
+            if not current_url:
+                print("대상 URL을 입력하세요.")
+                continue
 
             goal_in = input("수행할 작업(Goal) 입력 (스킬 목록 보기 'skills', 종료 'q'): ").strip()
             if goal_in.lower() == "q":

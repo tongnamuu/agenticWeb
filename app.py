@@ -208,7 +208,7 @@ DEMO_PROTECTED_HTML = """<!DOCTYPE html>
 
 @app.route("/")
 def index():
-    return render_template("index.html", default_url="")
+    return render_template("index.html")
 
 
 @app.route("/demo-blog")

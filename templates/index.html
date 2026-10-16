@@ -42,14 +42,14 @@
     <!-- URL Bar & Presets -->
     <div class="flex items-center gap-2 flex-1 max-w-3xl">
       <select id="preset-select" onchange="applyPresetUrl()" class="bg-slate-900 border border-slate-700 text-xs text-slate-300 rounded-lg px-2.5 py-2">
-        <option value="{{ default_url }}">📌 기본 투두리스트 (ToDoList)</option>
+        <option value="">사이트 URL을 입력하세요</option>
         <option value="http://127.0.0.1:5055/demo-blog">📝 데모 블로그 보드 (다른 URL 스킬 분리 테스트)</option>
         <option value="http://127.0.0.1:5055/demo-protected">🔒 보안 포털 (로그인 필요 HITL 테스트)</option>
       </select>
       <input
         id="target-url"
         type="text"
-        value="{{ default_url }}"
+        value=""
         oninput="onUrlInputChanged()"
         placeholder="분석 및 제어할 웹사이트 URL 입력"
         class="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-sm text-white focus:outline-none focus:border-indigo-500"

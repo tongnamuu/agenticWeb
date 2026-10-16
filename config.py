@@ -23,10 +23,6 @@ def get_api_key(override_key: str = "") -> str:
     ).strip()
 
 
-TARGET_URL: str = os.environ.get(
-    "TARGET_URL", "https://tongnamuu.github.io/ToDoList/"
-).strip()
-
 # Role-specific Gemini model selection:
 # - root_verifier: High-precision reasoning for DOM state diff verification & retry diagnosis
 # - skill_synthesizer: Deep structural DOM analysis & reusable JSON Schema + step pipeline synthesis
