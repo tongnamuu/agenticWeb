@@ -120,6 +120,17 @@ def api_resume_analysis(job_id):
 
 @routes.route('/api/login-browser', methods=['POST'])
 def api_login_browser():
+    import os
+    import sys
+    desktop = sys.platform == 'darwin' or bool(os.environ.get('DISPLAY'))
+    local_request = request.remote_addr in ('127.0.0.1', '::1')
+    if desktop and local_request and not os.environ.get('K_SERVICE'):
+        try:
+            browser_session.show_for_login()
+            return jsonify(ok=True, mode='native')
+        except Exception:
+            # Keep a usable remote view if the desktop window cannot be opened.
+            pass
     return jsonify(ok=True, mode='remote', view_url=url_for('studio.browser_view'))
 
 

@@ -108,9 +108,13 @@ class SiteApiTests(unittest.TestCase):
                     session['user'] = {'id': 'alice'}
                     session['csrf_token'] = 'csrf'
                 headers = {'X-CSRF-Token': 'csrf'}
-                self.assertEqual(client.post('/api/login-browser', headers=headers).status_code, 200)
-                browser.show_for_login.assert_not_called()
-                self.assertEqual(client.post('/api/login-browser', headers=headers).json['view_url'], '/browser-session')
+                from unittest.mock import patch
+                with patch.dict('os.environ', {'K_SERVICE':'agentic-web'}):
+                    self.assertEqual(client.post('/api/login-browser', headers=headers).json['view_url'], '/browser-session')
+                    browser.show_for_login.assert_not_called()
+                with patch.dict('os.environ', {'K_SERVICE':''}), patch('sys.platform', 'darwin'):
+                    self.assertEqual(client.post('/api/login-browser', headers=headers).json['mode'], 'native')
+                    browser.show_for_login.assert_called_once_with()
                 for url, auth, expected in [
                     ('https://github.com/login', True, False),
                     ('https://blog.test/login', False, False),

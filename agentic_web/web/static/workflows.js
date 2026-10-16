@@ -208,11 +208,13 @@
           setBusy(true);
           try {
             const remote = await api('/api/login-browser', {});
+            if (remote.mode === 'remote') {
             const frame = document.createElement('iframe');
             frame.src = remote.view_url; frame.title = '실행기 브라우저 로그인';
             frame.style.cssText = 'width:100%;height:650px;border:1px solid #475569';
             output.append(frame);
-            notice('실행기 브라우저에서 로그인하세요. 완료되면 자동 재개합니다.');
+            }
+            notice(remote.mode === 'native' ? '열린 Chrome 실행기 창에서 로그인하세요. 완료되면 자동 재개합니다.' : '아래 브라우저 화면에서 로그인하세요. 완료되면 자동 재개합니다.');
             const url = data.workflow.steps[data.next_step].url;
             while (true) {
               await new Promise(resolve => setTimeout(resolve, 2000));

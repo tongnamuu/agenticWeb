@@ -446,8 +446,12 @@
       try {
         const remote = await requestJson('/api/login-browser', {method:'POST'});
         const frame = document.getElementById('remote-browser');
-        frame.src = remote.view_url; frame.classList.remove('hidden');
-        document.getElementById('hitl-prompt-text').textContent = '아래 실행기 브라우저 화면에서 로그인하세요. GitHub 등 외부 로그인도 그 창에서 진행하면 됩니다. 완료 후 자동으로 이어집니다.';
+        if (remote.mode === 'remote') {
+          frame.src = remote.view_url; frame.classList.remove('hidden');
+        } else { frame.src = 'about:blank'; frame.classList.add('hidden'); }
+        document.getElementById('hitl-prompt-text').textContent = remote.mode === 'native' ?
+          '열린 Chrome 실행기 창에서 로그인하세요. 완료되면 자동 재개합니다.' :
+          '아래 실행기 브라우저 화면에서 로그인하세요. 완료되면 자동 재개합니다.';
         const url = pendingHitlContext.url;
         while (watch === loginWatch && pendingHitlContext) {
           await new Promise(resolve => setTimeout(resolve, 2000));
