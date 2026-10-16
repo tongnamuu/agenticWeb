@@ -1,0 +1,142 @@
+"""Saved, user-selected URL tools with ordered execution and resumable input gates."""
+import copy
+import hashlib
+import json
+from pathlib import Path
+from threading import Lock
+from uuid import uuid4
+from skill_registry import URLMatcher, atomic_json
+
+
+def fingerprint(tool):
+    return hashlib.sha256(json.dumps(tool, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+
+
+def validate_arguments(tool, arguments):
+    if not isinstance(arguments, dict):
+        raise ValueError('단계 입력값은 JSON 객체여야 합니다.')
+    schema = tool.get('parameters') or {}
+    if isinstance(schema, list):
+        props = {p['name']: {'type': 'string'} for p in schema}
+        required = list(props)
+    else:
+        props, required = schema.get('properties', {}), schema.get('required', [])
+    missing = [key for key in required if key not in arguments or arguments[key] is None]
+    if missing:
+        raise ValueError('필수 입력값: ' + ', '.join(missing))
+    if set(arguments) - set(props):
+        raise ValueError('정의되지 않은 입력값이 있습니다.')
+    types = {'string': str, 'integer': int, 'number': (int, float), 'boolean': bool,
+             'object': dict, 'array': list}
+    for key, value in arguments.items():
+        definition = props[key]
+        kind = definition.get('type', 'string')
+        expected = types.get(kind)
+        if expected and (not isinstance(value, expected) or kind in ('integer', 'number') and isinstance(value, bool)):
+            raise ValueError(f'{key}: {kind} 형식으로 입력하세요.')
+        if 'enum' in definition and value not in definition['enum']:
+            raise ValueError(f'{key}: 허용되지 않은 값입니다.')
+
+
+class SavedWorkflows:
+    def __init__(self, registry, browser, verifier, directory='workflows_store'):
+        self.registry, self.browser, self.verifier = registry, browser, verifier
+        self.directory = Path(directory)
+        self.directory.mkdir(parents=True, exist_ok=True)
+        self.lock = Lock()
+        self.runs = {}
+
+    def tool(self, url, name):
+        tools, package, _ = self.registry.get_tools_strictly_for_url(url)
+        tool = next((t for t in tools if t['name'] == name), None)
+        if not package or not tool:
+            raise ValueError('등록되지 않은 URL 또는 스킬입니다: ' + name)
+        return tool
+
+    def list(self):
+        return [json.loads(p.read_text(encoding='utf-8')) for p in sorted(self.directory.glob('*.json'))]
+
+    def get(self, identifier):
+        if not isinstance(identifier, str) or len(identifier) != 32 or any(c not in '0123456789abcdef' for c in identifier):
+            raise ValueError('잘못된 워크플로우 ID입니다.')
+        path = self.directory / (identifier + '.json')
+        if not path.exists():
+            raise ValueError('워크플로우를 찾을 수 없습니다.')
+        return json.loads(path.read_text(encoding='utf-8'))
+
+    def save(self, data):
+        name = str(data.get('name') or '').strip()
+        steps = data.get('steps')
+        if not name or not isinstance(steps, list) or not 1 <= len(steps) <= 30:
+            raise ValueError('이름과 1~30개의 단계를 지정하세요.')
+        prepared = []
+        for step in steps:
+            url = URLMatcher.normalize_url(step.get('url', ''))
+            tool = self.tool(url, step.get('tool_name'))
+            arguments = step.get('arguments', {})
+            validate_arguments(tool, arguments)
+            prepared.append({'url': url, 'tool_name': tool['name'], 'arguments': arguments,
+                             'tool_fingerprint': fingerprint(tool)})
+        identifier = data.get('id') or uuid4().hex
+        if data.get('id'):
+            self.get(identifier)
+        workflow = {'id': identifier, 'name': name, 'steps': prepared}
+        atomic_json(str(self.directory / (identifier + '.json')), workflow)
+        return workflow
+
+    def run(self, identifier, run_id=None):
+        if not self.lock.acquire(blocking=False):
+            raise ValueError('다른 워크플로우가 실행 중입니다.')
+        try:
+            if run_id:
+                run = self.runs.get(run_id)
+                if not run or run['workflow']['id'] != identifier or run['status'] != 'NEEDS_USER_INPUT':
+                    raise ValueError('재개할 실행을 찾을 수 없습니다.')
+            else:
+                workflow = self.get(identifier)
+                # Validate every dependency before making the first mutation.
+                for step in workflow['steps']:
+                    if fingerprint(self.tool(step['url'], step['tool_name'])) != step['tool_fingerprint']:
+                        raise ValueError('스킬이 변경되었습니다. 워크플로우를 다시 저장하세요.')
+                run = {'run_id': uuid4().hex, 'workflow': copy.deepcopy(workflow), 'status': 'RUNNING',
+                       'next_step': 0, 'results': [], 'message': ''}
+                self.runs[run['run_id']] = run
+            run['status'] = 'RUNNING'
+            while run['next_step'] < len(run['workflow']['steps']):
+                step = run['workflow']['steps'][run['next_step']]
+                tool = self.tool(step['url'], step['tool_name'])
+                if fingerprint(tool) != step['tool_fingerprint']:
+                    raise ValueError('스킬이 변경되어 실행을 중단했습니다. 다시 저장하세요.')
+                if not URLMatcher.is_exact_url_match(self.browser.current_url, step['url']):
+                    self.browser.navigate(step['url'])
+                if not URLMatcher.is_exact_url_match(self.browser.current_url, step['url']):
+                    run.update(status='NEEDS_USER_INPUT', message='페이지가 이동되었습니다. 브라우저에서 로그인 후 재개하세요.')
+                    return run
+                for attempt in (1, 2):
+                    output = self.browser.execute_tool(tool, step['arguments'])
+                    record = {'tool_name': tool['name'], 'args': step['arguments'],
+                              'action_result': output['action_result'], 'verification': output['verification']}
+                    verdict = self.verifier.verify_execution(
+                        user_prompt=f"{tool['description']} 입력값: {json.dumps(step['arguments'], ensure_ascii=False)}",
+                        before_snapshot=output['before_snapshot'], after_snapshot=output['after_snapshot'], steps=[record])
+                    run['results'].append({'step': run['next_step'] + 1, 'url': step['url'],
+                                           'tool_name': tool['name'], 'attempt': attempt, 'verification': verdict})
+                    if verdict.get('success'):
+                        self.registry.increment_usage(step['url'])
+                        break
+                    if (verdict.get('status') == 'NEEDS_USER_INPUT' or
+                        output['action_result'].get('failure_code') in ('LOGIN_REQUIRED', 'PERMISSION_DENIED')):
+                        run.update(status='NEEDS_USER_INPUT', message='브라우저에서 로그인 또는 필요한 입력을 완료한 후 재개하세요.')
+                        return run
+                    # A successful mutation with uncertain verification must not be blindly repeated.
+                    if output['action_result'].get('success'):
+                        run.update(status='FAILED', message='변경 결과를 확인하지 못해 중복 실행을 중단했습니다.')
+                        return run
+                else:
+                    run.update(status='FAILED', message=verdict.get('reason', '단계 검증 실패'))
+                    return run
+                run['next_step'] += 1
+            run.update(status='SUCCESS', message='모든 단계를 순서대로 실행하고 검증했습니다.')
+            return run
+        finally:
+            self.lock.release()

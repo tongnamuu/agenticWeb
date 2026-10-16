@@ -1,0 +1,567 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Gemini URL-Skill Web Agent Studio</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    .wf-panel {margin:20px 24px;padding:20px;border:1px solid #334155;border-radius:12px;background:#0f172a;}
+    .wf-heading,.wf-tool,.wf-actions {display:flex;align-items:center;justify-content:space-between;gap:12px;}
+    .wf-heading {margin-bottom:12px;} .wf-grid {display:grid;grid-template-columns:1fr 1fr;gap:24px;}
+    .wf-panel h2,.wf-panel h3 {font-weight:700;margin-bottom:8px;} .wf-panel h2 {font-size:18px;}
+    .wf-scroll {max-height:420px;overflow:auto;margin:10px 0;} .wf-site {padding:12px;border:1px solid #334155;border-radius:8px;margin-bottom:10px;background:#111c30;}
+    .wf-tool {padding:10px 0;border-bottom:1px solid #263449;font-size:13px;} .wf-tool>div {min-width:0;}
+    .wf-muted {font-size:12px;color:#94a3b8;margin:6px 0;white-space:pre-wrap;overflow-wrap:anywhere;}
+    .wf-url {font-size:12px;color:#67e8f9;overflow-wrap:anywhere;} .wf-button {padding:6px 10px;border:1px solid #475569;border-radius:6px;font-size:12px;white-space:nowrap;background:#1e293b;}
+    .wf-button:hover {background:#334155;} .wf-button:disabled {opacity:.35;cursor:default;} .wf-primary {background:#4f46e5;} .wf-label {display:block;font-size:12px;color:#cbd5e1;margin:10px 0;}
+    .wf-input {display:block;width:100%;padding:8px;border:1px solid #475569;border-radius:6px;background:#020617;color:#fff;margin-top:4px;}
+    @media(max-width:800px){.wf-grid{grid-template-columns:1fr;}.wf-panel{margin:12px;}.wf-tool{flex-wrap:wrap;}}
+    body { background: #090d16; color: #e2e8f0; font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, sans-serif; }
+    .glass { background: rgba(15, 23, 42, 0.88); border: 1px solid rgba(51, 65, 85, 0.75); }
+    .code-scroll::-webkit-scrollbar { width: 6px; height: 6px; }
+    .code-scroll::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+  </style>
+</head>
+<body class="min-h-screen flex flex-col">
+  <!-- Header -->
+  <header class="border-b border-slate-800 bg-slate-950/90 px-6 py-3.5 flex flex-wrap items-center justify-between gap-4">
+    <div class="flex items-center gap-3">
+      <div class="w-9 h-9 rounded-xl bg-gradient-to-br from-indigo-500 to-cyan-400 flex items-center justify-center font-bold text-slate-950 text-lg">G</div>
+      <div>
+        <div class="flex items-center gap-2">
+          <h1 class="font-bold text-base text-white">Gemini Per-URL Skill Web Agent System</h1>
+          <span class="text-[11px] px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">Strict URL Routing + 1x Root Retry + HITL</span>
+        </div>
+        <p class="text-xs text-slate-400">
+          Root/Verifier: <code class="text-cyan-300">gemini-2.5-pro</code> · Skill Synthesizer: <code class="text-cyan-300">gemini-2.5-pro</code> · Executor: <code class="text-emerald-300">gemini-2.5-flash</code>
+        </p>
+      </div>
+    </div>
+
+    <!-- URL Bar & Presets -->
+    <div class="flex items-center gap-2 flex-1 max-w-3xl">
+      <select id="preset-select" onchange="applyPresetUrl()" class="bg-slate-900 border border-slate-700 text-xs text-slate-300 rounded-lg px-2.5 py-2">
+        <option value="{{ default_url }}">📌 기본 투두리스트 (ToDoList)</option>
+        <option value="http://127.0.0.1:5055/demo-blog">📝 데모 블로그 보드 (다른 URL 스킬 분리 테스트)</option>
+        <option value="http://127.0.0.1:5055/demo-protected">🔒 보안 포털 (로그인 필요 HITL 테스트)</option>
+      </select>
+      <input
+        id="target-url"
+        type="text"
+        value="{{ default_url }}"
+        oninput="onUrlInputChanged()"
+        placeholder="분석 및 제어할 웹사이트 URL 입력"
+        class="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-sm text-white focus:outline-none focus:border-indigo-500"
+      />
+      <button
+        onclick="analyzeCurrentUrl(false)"
+        class="px-3.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-xs font-semibold text-white transition"
+      >
+        URL 스킬 판별/추출
+      </button>
+      <button
+        onclick="analyzeCurrentUrl(true)"
+        title="강제로 페이지를 다시 분석하여 스킬을 재합성합니다"
+        class="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs text-slate-300 transition"
+      >
+        재합성
+      </button>
+    </div>
+  </header>
+
+  <section class="wf-panel" aria-label="사이트 스킬과 워크플로우">
+    <div class="wf-heading"><div><h2>사이트 스킬 · 워크플로우</h2><p class="wf-muted">사이트별 기능을 골라 원하는 순서로 연결하세요. 예: 할 일 추가 → 블로그 작성 → 할 일 완료</p></div><button type="button" class="wf-button" id="workflow-refresh">새로고침</button></div>
+    <div class="wf-grid">
+      <div><h3>등록된 사이트와 스킬</h3><div id="workflow-catalog" class="wf-scroll"></div></div>
+      <div><div class="wf-heading"><h3>워크플로우 만들기</h3><button type="button" class="wf-button" id="workflow-new">새로 만들기</button></div>
+        <label class="wf-label">워크플로우 이름<input id="workflow-name" class="wf-input" placeholder="블로그 작성 후 할 일 완료" maxlength="200"></label>
+        <div id="workflow-steps" class="wf-scroll"></div>
+        <button type="button" class="wf-button wf-primary" id="workflow-save">워크플로우 저장</button>
+        <p id="workflow-message" role="status" aria-live="polite" class="wf-muted"></p>
+        <div id="workflow-result"></div><h3>저장된 워크플로우</h3><div id="workflow-saved"></div>
+      </div>
+    </div>
+  </section>
+  <!-- URL Routing Status Banner -->
+  <div id="url-match-banner" class="bg-slate-900/90 border-b border-slate-800 px-6 py-2 flex items-center justify-between text-xs">
+    <div class="flex items-center gap-2">
+      <span id="url-match-badge" class="px-2 py-0.5 rounded font-semibold bg-slate-800 text-slate-300">URL 판별 대기중</span>
+      <span id="url-match-text" class="text-slate-400">URL을 입력하거나 에이전트에게 명령을 내리면 정규화된 URL 기준으로 스킬 호출 여부를 엄격히 판별합니다.</span>
+    </div>
+    <div id="live-dom-summary" class="text-slate-400 font-mono"></div>
+  </div>
+
+  <!-- Main 3-Column Grid -->
+  <main class="flex-1 grid grid-cols-12 gap-4 p-4 max-w-[1750px] w-full mx-auto">
+    <!-- Left Column: Per-URL Skill Registry (3 cols) -->
+    <section class="col-span-12 lg:col-span-3 glass rounded-xl p-4 flex flex-col max-h-[calc(100vh-135px)]">
+      <div class="flex items-center justify-between mb-3">
+        <div>
+          <h2 class="text-sm font-bold text-white">🗂️ URL별 스킬 레지스트리</h2>
+          <p class="text-[11px] text-slate-400">정규화 URL이 정확히 일치할 때만 활성화됨</p>
+        </div>
+        <button onclick="loadSkills()" class="text-xs text-indigo-400 hover:underline">새로고침</button>
+      </div>
+      <div id="skill-registry-list" class="flex-1 overflow-y-auto code-scroll space-y-2.5 pr-1"></div>
+    </section>
+
+    <!-- Center Column: Active URL Skill Tools & Direct Tester (4 cols) -->
+    <section class="col-span-12 lg:col-span-4 glass rounded-xl p-4 flex flex-col max-h-[calc(100vh-135px)]">
+      <div class="flex items-center justify-between mb-3">
+        <div>
+          <h2 class="text-sm font-bold text-white">🛠️ 현재 URL 전용 추출 스킬/툴</h2>
+          <p id="active-skill-subtitle" class="text-[11px] text-slate-400">현재 URL에 매칭된 스킬의 Tool Schema 및 실행 파이프라인</p>
+        </div>
+      </div>
+      <div id="active-tools-container" class="flex-1 overflow-y-auto code-scroll space-y-3 pr-1">
+        <div class="text-xs text-slate-500 py-10 text-center">
+          현재 URL에 등록된 스킬을 불러오는 중이거나 아직 분석 전입니다.<br/>
+          우측에서 바로 명령을 실행하면 자동으로 분석 후 스킬에 추가됩니다.
+        </div>
+      </div>
+    </section>
+
+    <!-- Right Column: Root Agent Execution, Verification & 1x Retry Loop (5 cols) -->
+    <section class="col-span-12 lg:col-span-5 glass rounded-xl p-4 flex flex-col max-h-[calc(100vh-135px)]">
+      <div class="mb-3">
+        <h2 class="text-sm font-bold text-white">🤖 루트 에이전트 실행 & 성공/실패 검증 (실패 시 1회 재시도)</h2>
+        <p class="text-[11px] text-slate-400">
+          1) URL 스킬 매칭/생성 → 2) 로그인/입력 필요 시 유저 요청(HITL) → 3) 스킬 실행 → 4) 루트 검증 및 실패 시 1회 재루프
+        </p>
+      </div>
+
+      <!-- Quick Example Prompts -->
+      <div class="flex flex-wrap gap-1.5 mb-3">
+        <button onclick="setGoal('우유 사기 할 일 추가해줘')" class="text-[11px] px-2.5 py-1 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700">
+          + "우유 사기 할 일 추가해줘"
+        </button>
+        <button onclick="setGoal('현재 목록 상태 읽어줘')" class="text-[11px] px-2.5 py-1 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700">
+          🔍 "현재 목록 상태 읽어줘"
+        </button>
+        <button onclick="setGoal('우유 사기 항목 삭제해줘')" class="text-[11px] px-2.5 py-1 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700">
+          🗑️ "우유 사기 항목 삭제해줘"
+        </button>
+        <button onclick="setGoal('클라우드 배포 점검 티켓 추가해줘')" class="text-[11px] px-2.5 py-1 rounded-md bg-amber-950/60 hover:bg-amber-900/60 text-amber-300 border border-amber-700/50">
+          🔒 보안포털: "클라우드 배포 점검 티켓 추가해줘"
+        </button>
+      </div>
+
+      <!-- Goal Input -->
+      <div class="flex gap-2 mb-4">
+        <input
+          id="user-goal-input"
+          type="text"
+          placeholder="원하는 브라우저 작업을 자연어로 입력하세요 (예: 우유 사기 할 일 추가해줘)"
+          onkeydown="if(event.key==='Enter') executeGoal()"
+          class="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3.5 py-2 text-sm text-white focus:outline-none focus:border-emerald-500"
+        />
+        <button
+          id="run-goal-btn"
+          onclick="executeGoal()"
+          class="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-xs font-bold text-white transition"
+        >
+          에이전트 실행
+        </button>
+      </div>
+
+      <!-- Execution Timeline Log -->
+      <div id="execution-log" class="flex-1 overflow-y-auto code-scroll space-y-3 pr-1">
+        <div class="text-xs text-slate-500 py-12 text-center">
+          명령을 입력하고 [에이전트 실행]을 누르면 URL 판별, 스킬 호출, 루트 에이전트 성공/실패 검증 및 재시도 과정이 여기에 표시됩니다.
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- HITL Modal (Login Required / Missing User Input) -->
+  <div id="hitl-modal" class="fixed inset-0 bg-black/75 backdrop-blur-sm hidden items-center justify-center z-50 p-4">
+    <div class="bg-slate-900 border border-amber-500/50 rounded-2xl max-w-md w-full p-6 shadow-2xl">
+      <div class="flex items-center gap-2 text-amber-400 font-bold text-sm mb-2">
+        <span>⚠️ 사용자 입력 / 로그인 요청 (Human-in-the-Loop)</span>
+      </div>
+      <p id="hitl-prompt-text" class="text-xs text-slate-200 leading-relaxed mb-4"></p>
+
+      <!-- Login Form Section -->
+      <div id="hitl-login-fields" class="space-y-2.5 mb-4 hidden">
+        <div>
+          <label class="block text-[11px] text-slate-400 mb-1">아이디 / 이메일</label>
+          <input id="hitl-username" type="text" placeholder="예: admin" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white" />
+        </div>
+        <div>
+          <label class="block text-[11px] text-slate-400 mb-1">비밀번호</label>
+          <input id="hitl-password" type="password" placeholder="비밀번호 입력" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white" />
+        </div>
+        <div class="text-[11px] text-slate-400 pt-1">
+          💡 아이디/비밀번호를 입력해 자동 로그인하거나, 열린 Chrome 창에서 직접 로그인한 뒤 아래 <strong>[브라우저에서 직접 로그인 완료]</strong> 버튼을 누를 수 있습니다.
+        </div>
+      </div>
+
+      <!-- Missing Parameters Section -->
+      <div id="hitl-param-fields" class="space-y-2.5 mb-4 hidden"></div>
+
+      <div class="flex flex-wrap justify-end gap-2">
+        <button onclick="closeHitlModal()" class="px-3 py-1.5 rounded-lg bg-slate-800 text-xs text-slate-300">취소</button>
+        <button
+          id="hitl-direct-login-btn"
+          onclick="submitHitlInput(true)"
+          class="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-xs font-semibold text-white hidden"
+        >
+          브라우저에서 직접 로그인 완료 후 재개
+        </button>
+        <button
+          onclick="submitHitlInput(false)"
+          class="px-4 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-xs font-bold text-slate-950"
+        >
+          입력 전달 및 작업 재개
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let allSkills = [];
+    let pendingHitlContext = null;
+
+    function getCurrentUrl() {
+      return document.getElementById('target-url').value.trim();
+    }
+
+    function applyPresetUrl() {
+      const sel = document.getElementById('preset-select').value;
+      document.getElementById('target-url').value = sel;
+      loadSkills();
+    }
+
+    function setGoal(text) {
+      document.getElementById('user-goal-input').value = text;
+    }
+
+    function onUrlInputChanged() {
+      loadSkills();
+    }
+
+    async function loadSkills() {
+      const url = getCurrentUrl();
+      const res = await fetch('/api/skills?url=' + encodeURIComponent(url));
+      const data = await res.json();
+      allSkills = data.skills || [];
+      window.dispatchEvent(new Event('skills-updated'));
+      renderSkillRegistry(allSkills, data.normalized_query_url);
+      renderMatchedUrlStatus(data.matched_skill_for_query_url, data.normalized_query_url);
+    }
+
+    function renderMatchedUrlStatus(matchedSkill, normUrl) {
+      const badge = document.getElementById('url-match-badge');
+      const text = document.getElementById('url-match-text');
+      if (matchedSkill) {
+        badge.className = 'px-2 py-0.5 rounded font-semibold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40';
+        badge.textContent = '✅ URL 스킬 매칭됨 (재사용 준비 완료)';
+        text.textContent = `정규화 URL [${normUrl}] 전용 스킬 (${matchedSkill.skill_id}, v${matchedSkill.version}, 툴 ${matchedSkill.tools.length}개)이 즉시 호출됩니다.`;
+        renderActiveSkillTools(matchedSkill);
+      } else {
+        badge.className = 'px-2 py-0.5 rounded font-semibold bg-amber-500/20 text-amber-300 border border-amber-500/40';
+        badge.textContent = '🆕 미등록 URL (실행 시 자동 분석 & 스킬 등록)';
+        text.textContent = `정규화 URL [${normUrl}]에 등록된 스킬이 없습니다. 다른 URL의 스킬은 호출되지 않으며, 실행 시 새 스킬을 합성해 추가합니다.`;
+        document.getElementById('active-tools-container').innerHTML = `
+          <div class="text-xs text-slate-400 p-4 rounded-lg bg-slate-900/90 border border-slate-800">
+            현재 URL (<code class="text-amber-300">${normUrl}</code>)은 레지스트리에 등록되어 있지 않습니다.<br/>
+            상단 <strong>[URL 스킬 판별/추출]</strong> 또는 우측 <strong>[에이전트 실행]</strong>을 누르면 페이지를 분석해 스킬을 생성합니다.
+          </div>
+        `;
+      }
+    }
+
+    function renderSkillRegistry(skills, currentNormUrl) {
+      const container = document.getElementById('skill-registry-list');
+      if (!skills.length) {
+        container.innerHTML = '<div class="text-xs text-slate-500 py-8 text-center">저장된 URL 스킬이 없습니다.</div>';
+        return;
+      }
+      container.innerHTML = skills.map(s => {
+        const isCurrent = s.normalized_url === currentNormUrl;
+        return `
+          <div class="p-3 rounded-lg border ${isCurrent ? 'bg-indigo-950/40 border-indigo-500/60' : 'bg-slate-900/80 border-slate-800'}">
+            <div class="flex items-center justify-between gap-2 mb-1">
+              <span class="text-xs font-bold text-white truncate">${s.site_name || s.skill_id}</span>
+              <span class="text-[10px] px-1.5 py-0.5 rounded ${isCurrent ? 'bg-emerald-500/20 text-emerald-300' : 'bg-slate-800 text-slate-400'}">
+                ${isCurrent ? '현재 URL 일치' : '다른 URL (격리됨)'}
+              </span>
+            </div>
+            <div class="text-[11px] text-cyan-300 font-mono break-all mb-1.5">${s.normalized_url}</div>
+            <div class="flex items-center justify-between text-[11px] text-slate-400">
+              <span>툴 ${(s.tools || []).length}개 · v${s.version || 1}</span>
+              <div class="flex gap-2">
+                <button onclick="selectSkillUrl('${s.normalized_url}')" class="text-indigo-400 hover:underline">URL 선택</button>
+                <button onclick="deleteSkill('${s.normalized_url}')" class="text-rose-400 hover:underline">삭제</button>
+              </div>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    function selectSkillUrl(url) {
+      document.getElementById('target-url').value = url;
+      loadSkills();
+    }
+
+    async function deleteSkill(url) {
+      await fetch('/api/delete-skill', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({url})
+      });
+      loadSkills();
+    }
+
+    function renderActiveSkillTools(skill) {
+      const container = document.getElementById('active-tools-container');
+      const tools = skill.tools || [];
+      document.getElementById('active-skill-subtitle').textContent = `${skill.normalized_url} (${tools.length}개 툴 활성화)`;
+      container.innerHTML = tools.map(t => {
+        const props = (t.parameters && t.parameters.properties) || {};
+        const propKeys = Object.keys(props);
+        const inputsHtml = propKeys.map(k => `
+          <div class="mt-1.5">
+            <label class="block text-[10px] text-slate-400">${k} <span class="text-slate-500">(${props[k].description || ''})</span></label>
+            <input id="tool-arg-${t.name}-${k}" type="text" placeholder="${k} 입력" class="w-full bg-slate-950 border border-slate-700 rounded px-2 py-1 text-xs text-white" />
+          </div>
+        `).join('');
+        return `
+          <div class="p-3 rounded-lg bg-slate-900/90 border border-slate-800">
+            <div class="flex items-center justify-between">
+              <span class="text-xs font-bold text-emerald-300 font-mono">${t.name}()</span>
+              <button onclick='invokeToolDirectly(${JSON.stringify(t.name)}, ${JSON.stringify(propKeys)})' class="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-[11px] text-white border border-slate-700">직접 실행</button>
+            </div>
+            <p class="text-[11px] text-slate-300 mt-1">${t.description || ''}</p>
+            ${inputsHtml}
+            <details class="mt-2">
+              <summary class="text-[10px] text-slate-500 cursor-pointer">실행기 브라우저 액션 파이프라인 (${(t.steps || []).length} steps)</summary>
+              <pre class="mt-1 text-[10px] text-slate-400 bg-slate-950 p-2 rounded overflow-x-auto">${JSON.stringify(t.steps || [], null, 2)}</pre>
+            </details>
+          </div>
+        `;
+      }).join('');
+    }
+
+    async function invokeToolDirectly(toolName, propKeys) {
+      const url = getCurrentUrl();
+      const args = {};
+      for (const k of propKeys) {
+        const el = document.getElementById(`tool-arg-${toolName}-${k}`);
+        if (el && el.value.trim()) args[k] = el.value.trim();
+      }
+      prependLogCard({
+        title: `⚡ 스킬 툴 직접 실행 요청: ${toolName}`,
+        body: `URL: ${url} | 인자: ${JSON.stringify(args)}`
+      });
+      const res = await fetch('/api/call-tool', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({url, tool_name: toolName, arguments: args})
+      });
+      const data = await res.json();
+      renderExecutionResultCard({
+        status: data.ok ? 'SUCCESS' : 'FAILED',
+        normalized_url: url,
+        skill_reused: true,
+        retry_count: 0,
+        final_message: data.verification ? data.verification.summary_for_user : (data.error || ''),
+        attempts: [{
+          attempt: 1,
+          tool_call: {tool_name: toolName, arguments: args},
+          root_verification: data.verification || {}
+        }]
+      });
+    }
+
+    async function analyzeCurrentUrl(forceResynthesize) {
+      const url = getCurrentUrl();
+      prependLogCard({
+        title: forceResynthesize ? '🔄 URL 스킬 강제 재합성 중...' : '🔍 URL 판별 및 페이지 분석 중...',
+        body: `대상 URL: ${url}`
+      });
+      const res = await fetch('/api/analyze', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({url, force_resynthesize: forceResynthesize})
+      });
+      const data = await res.json();
+      if (data.status === 'NEEDS_USER_INPUT') {
+        openHitlModal(url, '페이지 분석 및 스킬 생성', data);
+        return;
+      }
+      await loadSkills();
+      prependLogCard({
+        title: data.reused ? '✅ 기존 URL 스킬 매칭 완료 (재사용)' : '✨ 신규 URL 스킬 생성 및 레지스트리 추가 완료',
+        body: `정규화 URL: ${data.normalized_url} | 스킬 ID: ${data.skill?.skill_id} | 툴 수: ${(data.skill?.tools || []).length}개`
+      });
+    }
+
+    async function executeGoal(userProvidedInput = null) {
+      const url = getCurrentUrl();
+      const goal = document.getElementById('user-goal-input').value.trim();
+      if (!goal) {
+        alert('수행할 작업 명령(Goal)을 입력해주세요.');
+        return;
+      }
+      const btn = document.getElementById('run-goal-btn');
+      btn.disabled = true;
+      btn.textContent = '실행/검증 중...';
+
+      prependLogCard({
+        title: userProvidedInput ? '▶️ 유저 입력 반영 후 루트 에이전트 재개' : '🚀 루트 에이전트 실행 시작',
+        body: `URL: ${url}\n목표: "${goal}"`
+      });
+
+      try {
+        const res = await fetch('/api/execute', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({url, goal, user_provided_input: userProvidedInput})
+        });
+        const data = await res.json();
+        await loadSkills();
+
+        if (data.status === 'NEEDS_USER_INPUT') {
+          renderExecutionResultCard(data);
+          openHitlModal(url, goal, data);
+        } else {
+          renderExecutionResultCard(data);
+        }
+      } finally {
+        btn.disabled = false;
+        btn.textContent = '에이전트 실행';
+      }
+    }
+
+    function openHitlModal(url, goal, data) {
+      pendingHitlContext = {url, goal, data};
+      const req = data.user_input_request || {};
+      const inputType = req.input_type || 'LOGIN_REQUIRED';
+      document.getElementById('hitl-prompt-text').textContent =
+        req.message || data.summary || '작업을 계속하려면 사용자 입력 또는 로그인이 필요합니다.';
+
+      const loginFields = document.getElementById('hitl-login-fields');
+      const paramFields = document.getElementById('hitl-param-fields');
+      const directLoginBtn = document.getElementById('hitl-direct-login-btn');
+
+      if (inputType === 'LOGIN_REQUIRED') {
+        loginFields.classList.remove('hidden');
+        directLoginBtn.classList.remove('hidden');
+        paramFields.classList.add('hidden');
+      } else {
+        loginFields.classList.add('hidden');
+        directLoginBtn.classList.add('hidden');
+        paramFields.classList.remove('hidden');
+        const fields = req.fields || [{name: 'text', label: '추가 입력값'}];
+        paramFields.innerHTML = fields.map(f => {
+          const fname = typeof f === 'string' ? f : f.name;
+          const flabel = typeof f === 'string' ? f : (f.label || f.name);
+          return `
+            <div>
+              <label class="block text-[11px] text-slate-400 mb-1">필수 입력값: ${flabel}</label>
+              <input id="hitl-param-${fname}" type="text" placeholder="${flabel} 값을 입력하세요" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white" />
+            </div>
+          `;
+        }).join('');
+      }
+
+      const modal = document.getElementById('hitl-modal');
+      modal.classList.remove('hidden');
+      modal.classList.add('flex');
+    }
+
+    function closeHitlModal() {
+      const modal = document.getElementById('hitl-modal');
+      modal.classList.add('hidden');
+      modal.classList.remove('flex');
+    }
+
+    async function submitHitlInput(loginCompletedInBrowser) {
+      if (!pendingHitlContext) return;
+      const req = pendingHitlContext.data.user_input_request || {};
+      const inputType = req.input_type || 'LOGIN_REQUIRED';
+      let payload = {};
+
+      if (inputType === 'LOGIN_REQUIRED') {
+        if (loginCompletedInBrowser) {
+          payload = {browser_login_completed: true};
+        } else {
+          const u = document.getElementById('hitl-username').value.trim();
+          const p = document.getElementById('hitl-password').value.trim();
+          payload = {username: u, password: p, browser_login_completed: false};
+        }
+      } else {
+        const fields = req.fields || [{name: 'text'}];
+        for (const f of fields) {
+          const fname = typeof f === 'string' ? f : f.name;
+          const el = document.getElementById(`hitl-param-${fname}`);
+          if (el && el.value.trim()) payload[fname] = el.value.trim();
+        }
+      }
+
+      closeHitlModal();
+      await executeGoal(payload);
+    }
+
+    function prependLogCard({title, body}) {
+      const container = document.getElementById('execution-log');
+      const card = document.createElement('div');
+      card.className = 'p-3 rounded-lg bg-slate-900/70 border border-slate-800 text-xs';
+      card.innerHTML = `<div class="font-semibold text-slate-200">${title}</div><div class="text-slate-400 whitespace-pre-line mt-1">${body}</div>`;
+      container.prepend(card);
+    }
+
+    function renderExecutionResultCard(data) {
+      const container = document.getElementById('execution-log');
+      const status = data.status;
+      const badgeClass =
+        status === 'SUCCESS'
+          ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+          : status === 'NEEDS_USER_INPUT'
+          ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+          : 'bg-rose-500/20 text-rose-300 border-rose-500/40';
+
+      const attemptsHtml = (data.attempts || []).map(att => {
+        const attNo = att.attempt_number || att.attempt || 1;
+        const v = att.verification || att.root_verification || {};
+        const vStatus = v.status || v.verdict || (v.success ? 'SUCCESS' : 'FAILED');
+        const stepSummary = (att.steps || []).map(s => `${s.tool_name}(${JSON.stringify(s.args || {})})`).join(', ')
+          || (att.tool_call ? `${att.tool_call.tool_name}(${JSON.stringify(att.tool_call.arguments || {})})` : '도구 호출');
+        return `
+          <div class="mt-2 p-2.5 rounded bg-slate-950/90 border border-slate-800 text-[11px]">
+            <div class="flex items-center justify-between gap-2">
+              <span class="font-bold text-indigo-300">${att.is_retry ? '🔄 2차 재시도 루프' : '▶️ 1차 실행'} (#${attNo}) → ${stepSummary}</span>
+              <span class="px-1.5 py-0.5 rounded font-semibold ${vStatus === 'SUCCESS' ? 'bg-emerald-500/20 text-emerald-300' : 'bg-rose-500/20 text-rose-300'}">
+                루트 검증: ${vStatus}
+              </span>
+            </div>
+            <div class="text-slate-300 mt-1">${v.reason || v.summary_for_user || ''}</div>
+          </div>
+        `;
+      }).join('');
+
+      const card = document.createElement('div');
+      card.className = 'p-3.5 rounded-xl bg-slate-900 border border-slate-700 text-xs space-y-2';
+      card.innerHTML = `
+        <div class="flex items-center justify-between gap-2">
+          <span class="px-2 py-0.5 rounded border font-bold ${badgeClass}">최종 판정: ${status}</span>
+          <span class="text-[11px] text-slate-400">
+            URL 스킬 재사용: <strong>${data.skill_reused ? 'HIT (기존 스킬)' : 'NEW (신규 생성)'}</strong> · 재시도 루프: <strong>${data.retry_count || 0}회</strong>
+          </span>
+        </div>
+        <div class="text-slate-200 whitespace-pre-line font-medium">${data.summary || data.final_message || ''}</div>
+        ${attemptsHtml}
+      `;
+      container.prepend(card);
+    }
+
+    window.addEventListener('DOMContentLoaded', () => {
+      loadSkills();
+    });
+  </script>
+<script src="{{ url_for('static', filename='workflows.js') }}" defer></script>
+</body>
+</html>
