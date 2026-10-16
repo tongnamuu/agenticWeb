@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
+# Validate the whole file before changing any cloud resources.
+bash -n "$0"
 
 SERVICE_NAME="${SERVICE_NAME:-agentic-web}"
 REGION="${REGION:-asia-northeast3}"
@@ -30,34 +32,17 @@ if [ -f .env ]; then
   set +a
 fi
 
-# Automatically detect GCP Project from GOOGLE_CLIENT_ID prefix (800515339243) or gcloud config
-PROJECT_ID="${GOOGLE_CLOUD_PROJECT:-}"
-if [ -z "$PROJECT_ID" ] && [ -n "${GOOGLE_CLIENT_ID:-}" ]; then
-  PROJECT_NUMBER="${GOOGLE_CLIENT_ID%%-*}"
-  if [[ "$PROJECT_NUMBER" =~ ^[0-9]+$ ]]; then
-    PROJECT_ID="$(gcloud projects describe "$PROJECT_NUMBER" --format='value(projectId)' 2>/dev/null || true)"
+# Deploy to the configured project; never select an arbitrary account's first project.
+PROJECT_ID="${GOOGLE_CLOUD_PROJECT:-h2gdm-hack26icn-2680}"
+for required_var in GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET FLASK_SECRET_KEY; do
+  if [ -z "${!required_var:-}" ]; then
+    echo "❌ ${required_var} 설정이 필요합니다. .env에 웹앱용 Google OAuth 설정을 입력하세요."
+    exit 1
   fi
-fi
-
-if [ -z "$PROJECT_ID" ] || [ "$PROJECT_ID" = "(unset)" ]; then
-  PROJECT_ID="$(gcloud config get-value project 2>/dev/null || true)"
-fi
-
-if [ -z "$PROJECT_ID" ] || [ "$PROJECT_ID" = "(unset)" ]; then
-  PROJECT_ID="$(gcloud projects list --format='value(projectId)' --limit=1 2>/dev/null || true)"
-fi
-
-if [ -z "$PROJECT_ID" ] || [ "$PROJECT_ID" = "(unset)" ]; then
-  echo "❌ GCP 프로젝트를 찾을 수 없습니다. 'gcloud config set project [PROJECT_ID]' 실행 후 다시 시도하세요."
-  exit 1
-fi
+done
 
 gcloud config set project "$PROJECT_ID"
 echo "🚀 배포 대상 GCP 프로젝트: $PROJECT_ID (리전: $REGION, 서비스: $SERVICE_NAME)"
-
-if [ -z "${FLASK_SECRET_KEY:-}" ]; then
-  FLASK_SECRET_KEY="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
-fi
 
 echo "🔧 Cloud Run / Cloud Build / Artifact Registry / Cloud Firestore API 활성화 중..."
 gcloud services enable \
@@ -76,9 +61,19 @@ if ! gcloud firestore databases describe --database="(default)" --project="$PROJ
     --project="$PROJECT_ID" || true
 fi
 
-INITIAL_REDIRECT_URI="${GOOGLE_REDIRECT_URI:-}"
-if [[ -z "$INITIAL_REDIRECT_URI" || "$INITIAL_REDIRECT_URI" == http://127.0.0.1* || "$INITIAL_REDIRECT_URI" == http://localhost* ]]; then
-  INITIAL_REDIRECT_URI="https://placeholder.run.app/auth/google/callback"
+# Keep the local callback in .env; deployment has its own explicit callback.
+DEPLOY_REDIRECT_URI="${GOOGLE_DEPLOY_REDIRECT_URI:-}"
+if [ -z "$DEPLOY_REDIRECT_URI" ]; then
+  PROJECT_NUMBER="$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)')"
+  if [[ ! "$PROJECT_NUMBER" =~ ^[0-9]+$ ]]; then
+    echo 'GCP 프로젝트 번호를 확인하지 못했습니다.' >&2
+    exit 1
+  fi
+  DEPLOY_REDIRECT_URI="https://${SERVICE_NAME}-${PROJECT_NUMBER}.${REGION}.run.app/auth/google/callback"
+fi
+if [[ "$DEPLOY_REDIRECT_URI" != https://*/auth/google/callback || "$DEPLOY_REDIRECT_URI" == *placeholder* ]]; then
+  echo 'GOOGLE_DEPLOY_REDIRECT_URI에 실제 HTTPS 콜백 주소를 설정하세요.' >&2
+  exit 1
 fi
 
 echo "📦 Cloud Run 컨테이너 빌드 및 배포 시작..."
@@ -93,19 +88,10 @@ gcloud run deploy "$SERVICE_NAME" \
   --timeout 300 \
   --concurrency 4 \
   --max-instances 1 \
-  --set-env-vars="HEADLESS_BROWSER=true,USE_FIRESTORE=true,GOOGLE_CLOUD_PROJECT=${PROJECT_ID},GEMINI_API_KEY=${GEMINI_API_KEY:-},FLASK_SECRET_KEY=${FLASK_SECRET_KEY},GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-},GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-},GOOGLE_REDIRECT_URI=${INITIAL_REDIRECT_URI}"
+  --set-env-vars="HEADLESS_BROWSER=true,USE_FIRESTORE=true,GOOGLE_CLOUD_PROJECT=${PROJECT_ID},GEMINI_API_KEY=${GEMINI_API_KEY:-},FLASK_SECRET_KEY=${FLASK_SECRET_KEY},GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-},GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-},GOOGLE_REDIRECT_URI=${DEPLOY_REDIRECT_URI}"
 
 SERVICE_URL="$(gcloud run services describe "$SERVICE_NAME" --project "$PROJECT_ID" --region "$REGION" --format='value(status.url)')"
-CALLBACK_URI="${SERVICE_URL}/auth/google/callback"
-
-if [ "$INITIAL_REDIRECT_URI" != "$CALLBACK_URI" ]; then
-  echo "🔗 서비스 URL 확정됨 ($SERVICE_URL) -> GOOGLE_REDIRECT_URI 자동 업데이트 중..."
-  gcloud run services update "$SERVICE_NAME" \
-    --quiet \
-    --project "$PROJECT_ID" \
-    --region "$REGION" \
-    --update-env-vars="GOOGLE_REDIRECT_URI=${CALLBACK_URI}"
-fi
+CALLBACK_URI="$DEPLOY_REDIRECT_URI"
 
 echo ""
 echo "✅ GCP Cloud Run 배포 완료!"
@@ -113,3 +99,8 @@ echo "🌐 서비스 접속 URL: ${SERVICE_URL}"
 echo "🔑 Google Cloud Console -> Google Auth Platform (OAuth 클라이언트)의"
 echo "   [승인된 리디렉션 URI]에 아래 주소를 추가해주세요:"
 echo "   ${CALLBACK_URI}"
+
+echo "👥 모든 Google 계정으로 로그인하려면 Google Auth Platform의 Audience를 External로 설정하세요."
+echo "   운영 공개 시 Branding 구성을 완료하고 In production 상태를 확인하세요."
+echo "   https://console.cloud.google.com/auth/audience?project=${PROJECT_ID}"
+echo "   일반 사용자는 gcloud 로그인이나 GCP 프로젝트 권한이 필요하지 않습니다."
